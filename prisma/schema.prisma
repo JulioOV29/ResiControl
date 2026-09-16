@@ -1,0 +1,369 @@
+// ============================================================================
+//  ResiControl - Sistema de Gestion y Analisis de Informacion de Obra
+//  Modelo relacional. El centro del sistema es RegistroEjecucion: representa
+//  el hecho operativo que ocurre en la obra y del que se derivan todos los
+//  indicadores. Ningun indicador se almacena como columna, todos se calculan.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/// La aplicacion habla con Neon por el endpoint con pool (PgBouncer) y las
+/// migraciones por el directo. Es lo que Neon recomienda y es la causa real del
+/// "prisma:error ... kind: Closed": el endpoint sin pool cierra la conexion
+/// cuando el proyecto se suspende por inactividad, y la siguiente consulta la
+/// encuentra muerta. PgBouncer la reabre por debajo sin que la app se entere.
+/// El DDL no puede pasar por el pool, y para eso esta directUrl.
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+//  Enumeraciones
+// ---------------------------------------------------------------------------
+
+/// Roles de aplicacion. ADMIN gestiona todo incluidos usuarios, RESIDENTE
+/// registra ejecucion y consulta, SUPERVISOR solo consulta y genera informes.
+enum RolUsuario {
+  ADMIN
+  RESIDENTE
+  SUPERVISOR
+}
+
+enum EstadoProyecto {
+  PLANEACION
+  EN_EJECUCION
+  SUSPENDIDO
+  FINALIZADO
+}
+
+/// Estado de avance de una torre o de un frente de trabajo.
+enum EstadoEjecucion {
+  PENDIENTE
+  EN_PROCESO
+  TERMINADO
+  SUSPENDIDO
+}
+
+// ---------------------------------------------------------------------------
+//  Usuarios de la aplicacion (distinto de Trabajador)
+// ---------------------------------------------------------------------------
+
+model Usuario {
+  id           Int        @id @default(autoincrement()) @map("id_usuario")
+  nombre       String     @db.VarChar(100)
+  apellido     String     @db.VarChar(100)
+  email        String     @unique @db.VarChar(150)
+  passwordHash String     @map("password_hash") @db.VarChar(255)
+  rol          RolUsuario @default(RESIDENTE)
+  activo       Boolean    @default(true)
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  registrosCreados      RegistroEjecucion[] @relation("RegistroCreadoPor")
+  registrosActualizados RegistroEjecucion[] @relation("RegistroActualizadoPor")
+
+  @@map("usuarios")
+}
+
+// ---------------------------------------------------------------------------
+//  Jerarquia fisica de la obra
+//  Proyecto > Torre > Piso > Zona > Frente de trabajo
+// ---------------------------------------------------------------------------
+
+model Proyecto {
+  id          Int            @id @default(autoincrement()) @map("id_proyecto")
+  codigo      String         @unique @db.VarChar(50)
+  nombre      String         @db.VarChar(150)
+  descripcion String?        @db.Text
+  fechaInicio DateTime?      @map("fecha_inicio") @db.Date
+  fechaFin    DateTime?      @map("fecha_fin") @db.Date
+  estado      EstadoProyecto @default(PLANEACION)
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  torres     Torre[]
+  cuadrillas Cuadrilla[]
+  metas      Meta[]
+
+  @@map("proyectos")
+}
+
+model Torre {
+  id          Int             @id @default(autoincrement()) @map("id_torre")
+  proyectoId  Int             @map("id_proyecto")
+  codigo      String          @db.VarChar(20)
+  nombre      String          @db.VarChar(50)
+  descripcion String?         @db.VarChar(255)
+  estado      EstadoEjecucion @default(PENDIENTE)
+
+  proyecto Proyecto @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  pisos    Piso[]
+
+  @@unique([proyectoId, codigo])
+  @@index([proyectoId])
+  @@map("torres")
+}
+
+model Piso {
+  id          Int     @id @default(autoincrement()) @map("id_piso")
+  torreId     Int     @map("id_torre")
+  numero      Int
+  nombre      String? @db.VarChar(50)
+  descripcion String? @db.VarChar(255)
+
+  torre Torre  @relation(fields: [torreId], references: [id], onDelete: Cascade)
+  zonas Zona[]
+
+  @@unique([torreId, numero])
+  @@index([torreId])
+  @@map("pisos")
+}
+
+/// Apartamentos, areas o zonas de trabajo dentro de un piso.
+model Zona {
+  id          Int     @id @default(autoincrement()) @map("id_zona")
+  pisoId      Int     @map("id_piso")
+  codigo      String  @db.VarChar(50)
+  nombre      String  @db.VarChar(100)
+  tipo        String? @db.VarChar(50)
+  descripcion String? @db.VarChar(255)
+
+  piso    Piso            @relation(fields: [pisoId], references: [id], onDelete: Cascade)
+  frentes FrenteTrabajo[]
+
+  @@unique([pisoId, codigo])
+  @@index([pisoId])
+  @@map("zonas")
+}
+
+/// Elemento fisico concreto sobre el que se ejecuta una actividad.
+/// codigoDwg no es unico globalmente: el mismo codigo puede repetirse en
+/// distintas ubicaciones, por eso la unicidad se define por zona.
+model FrenteTrabajo {
+  id          Int             @id @default(autoincrement()) @map("id_frente")
+  zonaId      Int             @map("id_zona")
+  codigoDwg   String          @map("codigo_dwg") @db.VarChar(50)
+  descripcion String          @db.VarChar(150)
+  unidad      String?         @db.VarChar(20)
+  estado      EstadoEjecucion @default(PENDIENTE)
+
+  /// Dimensiones del elemento fisico. Se escriben una sola vez aqui y cada
+  /// tarea hereda de ellas su cantidad total a ejecutar.
+  largo Decimal? @db.Decimal(10, 2)
+  alto  Decimal? @db.Decimal(10, 2)
+
+  zona      Zona                @relation(fields: [zonaId], references: [id], onDelete: Cascade)
+  registros RegistroEjecucion[]
+
+  @@unique([zonaId, codigoDwg, descripcion])
+  @@index([zonaId])
+  @@index([codigoDwg])
+  @@map("frentes_trabajo")
+}
+
+// ---------------------------------------------------------------------------
+//  Catalogos
+// ---------------------------------------------------------------------------
+
+model Actividad {
+  id           Int     @id @default(autoincrement()) @map("id_actividad")
+  nombre       String  @unique @db.VarChar(100)
+  unidadMedida String  @map("unidad_medida") @db.VarChar(20)
+  descripcion  String? @db.VarChar(255)
+  activo       Boolean @default(true)
+
+  /// Lo que se paga por unidad ejecutada de esta actividad. Es la tarifa
+  /// VIGENTE, la que se aplica a lo que se registre de hoy en adelante: cuando
+  /// cambie, lo ya registrado conserva la suya, porque cada jornada se guarda
+  /// con la tarifa que estaba puesta el dia que se guardo.
+  /// Opcional: una actividad puede existir antes de que se le fije precio.
+  valorM2 Decimal? @map("valor_m2") @db.Decimal(12, 2)
+
+  metas     Meta[]
+  registros RegistroEjecucion[]
+
+  @@map("actividades")
+}
+
+model Cargo {
+  id          Int     @id @default(autoincrement()) @map("id_cargo")
+  nombre      String  @unique @db.VarChar(80)
+  descripcion String? @db.VarChar(255)
+
+  trabajadores Trabajador[]
+  metas        Meta[]
+
+  @@map("cargos")
+}
+
+// ---------------------------------------------------------------------------
+//  Personal de obra
+// ---------------------------------------------------------------------------
+
+/// Persona que ejecuta actividades fisicas en la obra. No necesita cuenta.
+model Trabajador {
+  id        Int      @id @default(autoincrement()) @map("id_trabajador")
+  documento String?  @unique @db.VarChar(30)
+  nombre    String   @db.VarChar(100)
+  apellido  String   @db.VarChar(100)
+  cargoId   Int      @map("id_cargo")
+  activo    Boolean  @default(true) @map("estado")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  cargo        Cargo                 @relation(fields: [cargoId], references: [id], onDelete: Restrict)
+  asignaciones CuadrillaTrabajador[]
+  registros    RegistroEjecucion[]
+
+  @@index([cargoId])
+  @@map("trabajadores")
+}
+
+model Cuadrilla {
+  id          Int     @id @default(autoincrement()) @map("id_cuadrilla")
+  proyectoId  Int     @map("id_proyecto")
+  nombre      String  @db.VarChar(100)
+  descripcion String? @db.VarChar(255)
+  activo      Boolean @default(true) @map("estado")
+
+  proyecto    Proyecto              @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  integrantes CuadrillaTrabajador[]
+  registros   RegistroEjecucion[]
+
+  @@unique([proyectoId, nombre])
+  @@index([proyectoId])
+  @@map("cuadrillas")
+}
+
+/// Relacion muchos a muchos entre cuadrillas y trabajadores con historial:
+/// un trabajador puede pasar de una cuadrilla a otra y la asignacion anterior
+/// se conserva cerrando fechaFin y marcando activo en falso.
+model CuadrillaTrabajador {
+  id           Int       @id @default(autoincrement()) @map("id_cuadrilla_trabajador")
+  cuadrillaId  Int       @map("id_cuadrilla")
+  trabajadorId Int       @map("id_trabajador")
+  fechaInicio  DateTime  @map("fecha_inicio") @db.Date
+  fechaFin     DateTime? @map("fecha_fin") @db.Date
+  activo       Boolean   @default(true)
+
+  cuadrilla  Cuadrilla  @relation(fields: [cuadrillaId], references: [id], onDelete: Cascade)
+  trabajador Trabajador @relation(fields: [trabajadorId], references: [id], onDelete: Cascade)
+
+  @@index([cuadrillaId])
+  @@index([trabajadorId])
+  @@index([activo])
+  @@map("cuadrilla_trabajador")
+}
+
+/// Objetivo contra el cual se evalua la ejecucion. Una misma actividad puede
+/// tener metas distintas segun proyecto, cargo o periodo de vigencia.
+model Meta {
+  id                  Int       @id @default(autoincrement()) @map("id_meta")
+  proyectoId          Int       @map("id_proyecto")
+  actividadId         Int       @map("id_actividad")
+  cargoId             Int?      @map("id_cargo")
+  rendimientoObjetivo Decimal?  @map("rendimiento_objetivo") @db.Decimal(10, 2)
+  m2Objetivo          Decimal?  @map("m2_objetivo") @db.Decimal(12, 2)
+  vigenciaDesde       DateTime  @map("vigencia_desde") @db.Date
+  vigenciaHasta       DateTime? @map("vigencia_hasta") @db.Date
+
+  proyecto  Proyecto  @relation(fields: [proyectoId], references: [id], onDelete: Cascade)
+  actividad Actividad @relation(fields: [actividadId], references: [id], onDelete: Restrict)
+  cargo     Cargo?    @relation(fields: [cargoId], references: [id], onDelete: SetNull)
+
+  @@index([proyectoId, actividadId])
+  @@index([vigenciaDesde, vigenciaHasta])
+  @@map("metas")
+}
+
+// ---------------------------------------------------------------------------
+//  Tabla central: las jornadas de trabajo
+// ---------------------------------------------------------------------------
+
+/// Un dia de trabajo sobre un frente.
+///
+/// El primer registro de una obra abre el trabajo y lleva las dimensiones del
+/// elemento. Los registros siguientes son avances: no repiten las medidas, solo
+/// apuntan al registro anterior con registroAnteriorId, y guardan ademas el
+/// registro que abrio la obra en registroOrigenId.
+///
+/// Esas dos referencias cumplen papeles distintos y por eso conviven:
+///   registroAnteriorId  es lo que el residente ve y abre desde la pantalla
+///   registroOrigenId    es lo que usan los calculos para contar el area de la
+///                       obra una sola vez, sin recorrer la cadena entera
+model RegistroEjecucion {
+  id                 Int      @id @default(autoincrement()) @map("id_ejecucion")
+  codigoRegistro     String   @unique @map("codigo_registro") @db.VarChar(30)
+  fechaEjecucion     DateTime @map("fecha_ejecucion") @db.Date
+  frenteId           Int      @map("id_frente")
+  actividadId        Int      @map("id_actividad")
+  cuadrillaId        Int      @map("id_cuadrilla")
+  trabajadorId       Int?     @map("id_trabajador")
+  usuarioRegistraId  Int      @map("id_usuario_registra")
+  usuarioActualizaId Int?     @map("id_usuario_actualiza")
+
+  /// Encadenamiento de la obra.
+  registroAnteriorId Int? @unique @map("id_registro_anterior")
+  registroOrigenId   Int? @map("id_registro_origen")
+
+  /// Numero del subregistro dentro de su obra: 1, 2, 3... Nulo en el registro
+  /// que abre la obra. Se muestra como SR1, SR2 al lado del codigo de la obra.
+  numeroAvance Int? @map("numero_avance")
+
+  /// Dimensiones del elemento. Solo las lleva el registro que abre la obra.
+  largo Decimal? @db.Decimal(10, 2)
+  alto  Decimal? @db.Decimal(10, 2)
+
+  /// Cantidad producida en este dia, no el total de la obra.
+  m2Ejecutados Decimal @map("m2_ejecutados") @db.Decimal(12, 2)
+
+  horaInicio      DateTime @map("hora_inicio") @db.Time(0)
+  horaFinal       DateTime @map("hora_final") @db.Time(0)
+  tiempoRecesoMin Int      @default(0) @map("tiempo_receso_min")
+
+  /// Meta del dia. Se copia de Meta al guardar para que un cambio posterior de
+  /// meta no altere los indicadores historicos.
+  m2Meta Decimal? @map("m2_meta") @db.Decimal(12, 2)
+
+  /// Tarifa por unidad que tenia la actividad el dia que se guardo esta
+  /// jornada. Se copia por la misma razon que m2Meta, y aqui pesa mas: subir el
+  /// precio del pañete en marzo no puede reliquidar lo que se pago en enero.
+  /// Lo pagado por la jornada es m2_ejecutados * valor_m2.
+  valorM2 Decimal? @map("valor_m2") @db.Decimal(12, 2)
+
+  observaciones String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  frente           FrenteTrabajo @relation(fields: [frenteId], references: [id], onDelete: Restrict)
+  actividad        Actividad     @relation(fields: [actividadId], references: [id], onDelete: Restrict)
+  cuadrilla        Cuadrilla     @relation(fields: [cuadrillaId], references: [id], onDelete: Restrict)
+  trabajador       Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: SetNull)
+  usuarioRegistra  Usuario       @relation("RegistroCreadoPor", fields: [usuarioRegistraId], references: [id], onDelete: Restrict)
+  usuarioActualiza Usuario?      @relation("RegistroActualizadoPor", fields: [usuarioActualizaId], references: [id], onDelete: SetNull)
+
+  /// El dia anterior de esta misma obra. Es la referencia que se abre desde la
+  /// pantalla para ver de donde viene el avance.
+  registroAnterior RegistroEjecucion? @relation("Continuacion", fields: [registroAnteriorId], references: [id], onDelete: Restrict)
+  /// El dia siguiente, si ya se registro. Uno como maximo, por eso el unique.
+  continuacion     RegistroEjecucion? @relation("Continuacion")
+
+  /// El registro que abrio la obra, y los avances que cuelgan de el.
+  registroOrigen RegistroEjecucion?  @relation("Obra", fields: [registroOrigenId], references: [id], onDelete: Cascade)
+  avances        RegistroEjecucion[] @relation("Obra")
+
+  @@index([fechaEjecucion])
+  @@index([frenteId])
+  @@index([actividadId])
+  @@index([cuadrillaId])
+  @@index([trabajadorId])
+  @@unique([registroOrigenId, numeroAvance])
+  @@index([registroOrigenId])
+  @@index([fechaEjecucion, actividadId])
+  @@map("registros_ejecucion")
+}

@@ -1,0 +1,38 @@
+# dependencias
+node_modules/
+.pnp
+.pnp.js
+ 
+# build
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# Entorno. Aqui viven la cadena de Neon y el secreto de NextAuth, asi que nada
+# de esto sale del equipo. La plantilla tampoco: las cuatro variables que hacen
+# falta estan explicadas en el README, en "Puesta en marcha".
+.env
+.env.example
+.env.local
+.env*.local
+
+# prisma
+prisma/*.db
+
+# El juego de datos del Excel prototipo. Es informacion de la obra, no codigo.
+# Los scripts que lo cargan si se suben, para que "npm run setup" funcione en
+# cualquier clon; lo que se queda fuera son los datos.
+scripts/datos-prototipo.json
+
+# despliegue
+.vercel
+
+# sistema y editor
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.vscode/
+.idea/

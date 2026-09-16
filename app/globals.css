@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-obra-50 text-obra-900 antialiased;
+  }
+
+  /* Quita las flechas de los inputs numericos: en obra se escribe el valor. */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+@layer components {
+  .campo {
+    @apply w-full rounded-lg border border-obra-200 bg-white px-3 py-2 text-sm text-obra-900
+           placeholder:text-obra-400 focus:border-acento-500 focus:outline-none
+           focus:ring-2 focus:ring-acento-500/20 disabled:bg-obra-100 disabled:text-obra-400;
+  }
+
+  .etiqueta {
+    @apply mb-1.5 block text-sm font-medium text-obra-700;
+  }
+}
