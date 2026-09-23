@@ -3,7 +3,7 @@
 import { use, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, ArrowRightLeft, Loader2, Plus, Trash2 } from 'lucide-react'
-import { pedir, useRecursoUnico } from '@/lib/cliente'
+import { enviar, pedir, useRecursoUnico } from '@/lib/cliente'
 import { usePuede } from '@/lib/permisos'
 import { EncabezadoPagina, EstadoVacio } from '@/components/EncabezadoPagina'
 import { Boton } from '@/components/ui/button'
@@ -11,7 +11,7 @@ import { Insignia } from '@/components/ui/badge'
 import { Tarjeta, TarjetaCuerpo } from '@/components/ui/card'
 import { BotonIcono } from '@/components/ui/acciones'
 import { FormAsignacion } from '@/components/formularios/FormAsignacion'
-import { formatoFecha } from '@/lib/utils'
+import { formatoFecha, hoyTexto } from '@/lib/utils'
 import type { Cuadrilla } from '@/types/dominio'
 
 export default function CuadrillaDetallePage({ params }: { params: Promise<{ id: string }> }) {
@@ -28,7 +28,11 @@ export default function CuadrillaDetallePage({ params }: { params: Promise<{ id:
 
   const cerrarAsignacion = async (asignacionId: number) => {
     setProcesando(asignacionId)
-    await pedir(`/api/cuadrillas/${id}/integrantes/${asignacionId}`, { method: 'PATCH' })
+    // La fecha de cierre sale del equipo del residente, no del reloj UTC del
+    // servidor.
+    await enviar(`/api/cuadrillas/${id}/integrantes/${asignacionId}`, 'PATCH', {
+      fechaFin: hoyTexto(),
+    })
     setProcesando(0)
     recargar()
   }

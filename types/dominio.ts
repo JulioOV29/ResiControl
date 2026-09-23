@@ -92,10 +92,8 @@ export interface Actividad {
   nombre: string
   unidadMedida: string
   descripcion: string | null
-  /** Tarifa vigente por unidad ejecutada. Null mientras no se le fije precio. */
-  valorM2: number | null
   activo: boolean
-  _count?: { registros: number; metas: number }
+  _count?: { registros: number; metas: number; tarifas?: number }
 }
 
 export interface Cargo {
@@ -103,6 +101,14 @@ export interface Cargo {
   nombre: string
   descripcion: string | null
   _count?: { trabajadores: number }
+}
+
+/** Lo que se le paga a un trabajador por metro de una actividad. */
+export interface Tarifa {
+  id?: number
+  actividadId: number
+  valorM2: number
+  actividad?: { id: number; nombre: string; unidadMedida: string }
 }
 
 export interface Trabajador {
@@ -114,6 +120,8 @@ export interface Trabajador {
   activo: boolean
   cargo?: { id: number; nombre: string }
   asignaciones?: Array<{ id: number; cuadrilla: { id: number; nombre: string } }>
+  /** Sus precios por metro, uno por actividad. */
+  tarifas?: Tarifa[]
 }
 
 export interface Cuadrilla {
@@ -140,6 +148,9 @@ export interface Asignacion {
     apellido: string
     documento: string | null
     cargo: { id: number; nombre: string }
+    /** Sus precios por metro: con ellos el formulario de registro sabe si la
+     * jornada va a quedar con importe o sin el. */
+    tarifas?: Array<{ actividadId: number; valorM2: number }>
   }
 }
 
@@ -190,6 +201,9 @@ export interface Registro {
   registroAnteriorId: number | null
   /** El registro que abrio la obra. Nulo si este es ese registro. */
   registroOrigenId: number | null
+  /** La tarea de la que nacio la obra. Solo la lleva la apertura. */
+  tareaId: number | null
+  tarea?: { id: number; codigo: string } | null
   /** Numero del subregistro dentro de su obra: 1, 2, 3. Nulo en la apertura. */
   numeroAvance: number | null
   /** Medidas del elemento. Solo las lleva el registro que abre la obra. */
@@ -200,7 +214,7 @@ export interface Registro {
   horaFinal: string
   tiempoRecesoMin: number
   m2Meta: number | null
-  /** Tarifa que tenia la actividad cuando se guardo esta jornada. */
+  /** Tarifa que tenia el trabajador para esa actividad cuando se guardo. */
   valorM2: number | null
   observaciones: string | null
   frente?: FrenteUbicado
@@ -266,6 +280,50 @@ export interface Catalogos {
     activo: boolean
   }>
   cargos: Array<{ id: number; nombre: string }>
+  /**
+   * Combinaciones que existen de verdad en los registros: [zonaId, actividadId,
+   * cuadrillaId, trabajadorId]. Solo llega si se pide con ?combinaciones=1, y
+   * es lo que permite que los filtros del panel se condicionen entre si.
+   */
+  combinaciones?: Array<[number, number, number, number | null]>
+}
+
+/**
+ * Una tarea asignada, tal como la entrega /api/tareas: con su ubicacion
+ * completa, a quien se le asigno y la obra que nacio de ella, si ya nacio.
+ */
+export interface Tarea {
+  id: number
+  codigo: string
+  frenteId: number
+  actividadId: number
+  cuadrillaId: number | null
+  trabajadorId: number | null
+  largo: number
+  alto: number
+  m2Meta: number | null
+  fechaInicioPlan: string | null
+  fechaFinPlan: string | null
+  estado: EstadoEjecucion
+  observaciones: string | null
+  frente?: FrenteUbicado
+  actividad?: { id: number; nombre: string; unidadMedida: string }
+  cuadrilla?: { id: number; nombre: string; proyectoId: number } | null
+  trabajador?: {
+    id: number
+    nombre: string
+    apellido: string
+    cargo: { id: number; nombre: string }
+  } | null
+  usuarioAsigna?: { id: number; nombre: string; apellido: string }
+  /** La obra que salio de la tarea. Null mientras no se haya registrado nada. */
+  registro?: {
+    id: number
+    codigoRegistro: string
+    fechaEjecucion: string
+    m2Ejecutados: number
+    avances: Array<{ m2Ejecutados: number }>
+  } | null
 }
 
 /** Lo que devuelve /api/registros: la lista y su resumen ya calculado. */
@@ -275,14 +333,19 @@ export interface ListaRegistros {
     registros: number
     obras: number
     m2Totales: number
+    /** Producido en las jornadas filtradas. */
     m2Ejecutados: number
+    /** Producido en las cadenas completas de esas obras. */
+    m2Acumulados: number
     m2Pendientes: number
     m2Meta: number
+    jornadasSinMeta: number
     horasEfectivas: number
     minutosReceso: number
     rendimiento: number | null
     cumplimiento: number | null
     avance: number | null
+    obrasTerminadas: number
   }
   /** true cuando el filtro daba mas registros de los que caben en la pagina. */
   truncado: boolean

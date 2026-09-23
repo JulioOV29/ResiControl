@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 import { signOut } from 'next-auth/react'
 import {
   Building2,
+  ClipboardCheck,
   ClipboardList,
   FileBarChart,
   HardHat,
@@ -37,6 +38,7 @@ const navegacion: GrupoNav[] = [
     titulo: 'Operaciones',
     items: [
       { href: '/dashboard', etiqueta: 'Panel', icono: LayoutDashboard },
+      { href: '/tareas', etiqueta: 'Asignar tareas', icono: ClipboardCheck },
       { href: '/ejecucion', etiqueta: 'Registros de obra', icono: ClipboardList },
       { href: '/informes', etiqueta: 'Informes', icono: FileBarChart },
     ],

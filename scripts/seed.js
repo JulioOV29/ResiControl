@@ -14,7 +14,17 @@ const bcrypt = require('bcryptjs')
 const prisma = new PrismaClient()
 
 const EMAIL = (process.env.SEED_ADMIN_EMAIL || 'admin@resicontrol.com').toLowerCase()
-const PASSWORD = process.env.SEED_ADMIN_PASSWORD || 'Admin123*'
+
+// Sin contrasena por defecto: una clave de ejemplo escrita en el repositorio
+// acaba viva en produccion. Si no esta en el .env, el seed no corre.
+const PASSWORD = process.env.SEED_ADMIN_PASSWORD
+if (!PASSWORD || PASSWORD.length < 8) {
+  console.error(
+    'Falta SEED_ADMIN_PASSWORD en el .env (minimo 8 caracteres).\n' +
+      'Es la contrasena del administrador que crea este script.',
+  )
+  process.exit(1)
+}
 
 const CARGOS = [
   { nombre: 'Oficial', descripcion: 'Ejecuta la actividad principal del frente de trabajo' },

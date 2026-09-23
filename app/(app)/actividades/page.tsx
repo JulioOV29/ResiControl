@@ -11,7 +11,6 @@ import { Insignia } from '@/components/ui/badge'
 import { AccionesEditarBorrar } from '@/components/ui/acciones'
 import { ConfirmarEliminacion } from '@/components/ui/modal'
 import { FormActividad } from '@/components/formularios/FormActividad'
-import { formatoMoneda } from '@/lib/utils'
 import type { Actividad } from '@/types/dominio'
 
 export default function ActividadesPage() {
@@ -28,20 +27,6 @@ export default function ActividadesPage() {
   const columnas: Columna<Actividad>[] = [
     { clave: 'nombre', titulo: 'Actividad', render: (a) => a.nombre },
     { clave: 'unidad', titulo: 'Unidad', render: (a) => a.unidadMedida },
-    {
-      clave: 'valor',
-      titulo: 'Valor unitario',
-      alineacion: 'derecha',
-      render: (a) =>
-        a.valorM2 === null ? (
-          <span className="text-obra-400">Sin definir</span>
-        ) : (
-          <span className="tabular-nums text-obra-900">
-            {formatoMoneda(a.valorM2)}
-            <span className="ml-1 text-xs text-obra-400">/{a.unidadMedida}</span>
-          </span>
-        ),
-    },
     {
       clave: 'descripcion',
       titulo: 'Descripcion',

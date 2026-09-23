@@ -16,9 +16,14 @@ ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_receso_positiv
 ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_receso_positivo
   CHECK (tiempo_receso_min >= 0);
 
+-- Una meta de cero no es una meta: era la forma que tenia el formulario de
+-- decir "sin meta", y hacia que la jornada contara como incumplida. Ahora una
+-- jornada sin meta guarda NULL y se queda fuera del cumplimiento.
+UPDATE registros_ejecucion SET m2_meta = NULL WHERE m2_meta = 0;
+
 ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_meta_positiva;
 ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_meta_positiva
-  CHECK (m2_meta IS NULL OR m2_meta >= 0);
+  CHECK (m2_meta IS NULL OR m2_meta > 0);
 
 ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_hora_final_mayor;
 ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_hora_final_mayor
@@ -64,11 +69,37 @@ ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_valor_m2_posit
 ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_valor_m2_positivo
   CHECK (valor_m2 IS NULL OR valor_m2 >= 0);
 
--- --- actividades ------------------------------------------------------------
+-- La tarea la lleva el registro que ABRE la obra. Un avance no cuelga de una
+-- tarea: hereda la suya a traves del registro de origen.
+ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_tarea_solo_apertura;
+ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_tarea_solo_apertura
+  CHECK (id_tarea IS NULL OR id_registro_origen IS NULL);
 
-ALTER TABLE actividades DROP CONSTRAINT IF EXISTS chk_actividad_valor_m2_positivo;
-ALTER TABLE actividades ADD CONSTRAINT chk_actividad_valor_m2_positivo
-  CHECK (valor_m2 IS NULL OR valor_m2 >= 0);
+-- --- tareas -----------------------------------------------------------------
+
+ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_largo_positivo;
+ALTER TABLE tareas ADD CONSTRAINT chk_tarea_largo_positivo
+  CHECK (largo > 0);
+
+ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_alto_positivo;
+ALTER TABLE tareas ADD CONSTRAINT chk_tarea_alto_positivo
+  CHECK (alto > 0);
+
+ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_meta_positiva;
+ALTER TABLE tareas ADD CONSTRAINT chk_tarea_meta_positiva
+  CHECK (m2_meta IS NULL OR m2_meta > 0);
+
+ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_fechas_coherentes;
+ALTER TABLE tareas ADD CONSTRAINT chk_tarea_fechas_coherentes
+  CHECK (fecha_fin_plan IS NULL OR fecha_inicio_plan IS NULL OR fecha_fin_plan >= fecha_inicio_plan);
+
+-- --- trabajador_actividad ---------------------------------------------------
+-- El precio por metro se acuerda con la persona, no con la actividad. Cero se
+-- admite: hay trabajo que se registra y no se paga por unidad ejecutada.
+
+ALTER TABLE trabajador_actividad DROP CONSTRAINT IF EXISTS chk_tarifa_valor_m2_positivo;
+ALTER TABLE trabajador_actividad ADD CONSTRAINT chk_tarifa_valor_m2_positivo
+  CHECK (valor_m2 >= 0);
 
 -- --- metas ------------------------------------------------------------------
 

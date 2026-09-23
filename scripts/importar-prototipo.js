@@ -15,9 +15,21 @@ const path = require('path')
 const { PrismaClient } = require('@prisma/client')
 
 const prisma = new PrismaClient()
-const datos = JSON.parse(
-  fs.readFileSync(path.join(__dirname, 'datos-prototipo.json'), 'utf8'),
-)
+
+// El juego de datos no se versiona: es informacion de la obra, no codigo. En un
+// clon nuevo no existe, y conviene decirlo con todas las letras en vez de
+// fallar con un ENOENT de Node.
+const RUTA_DATOS = path.join(__dirname, 'datos-prototipo.json')
+if (!fs.existsSync(RUTA_DATOS)) {
+  console.error(
+    'No se encontro scripts/datos-prototipo.json.\n' +
+      'Ese archivo no se sube al repositorio: pidelo o exportalo del Excel prototipo.\n' +
+      'Sin el, "npm run setup" deja el sistema listo pero vacio.',
+  )
+  process.exit(1)
+}
+
+const datos = JSON.parse(fs.readFileSync(RUTA_DATOS, 'utf8'))
 
 const fecha = (texto) => new Date(`${texto}T00:00:00.000Z`)
 const hora = (texto) => {

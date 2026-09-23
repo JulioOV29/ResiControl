@@ -18,52 +18,107 @@ import { ok, manejarError, exigirSesion } from '@/lib/api'
  * Esto NO sustituye a /api/proyectos, /api/torres y compania: esas siguen
  * sirviendo a las pantallas de gestion, donde si hacen falta los conteos y el
  * detalle. Este endpoint es de solo lectura y solo para filtros.
+ *
+ * Con ?combinaciones=1 anade ademas las combinaciones (zona, actividad,
+ * cuadrilla, trabajador) que existen de verdad en los registros. Es lo que usa
+ * el panel para que sus filtros se condicionen entre si sin volver al
+ * servidor en cada clic. Las demas pantallas no lo piden y no lo pagan.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     await exigirSesion()
 
-    const [proyectos, torres, pisos, zonas, actividades, cuadrillas, trabajadores, cargos] =
-      await Promise.all([
-        prisma.proyecto.findMany({
-          orderBy: { codigo: 'asc' },
-          select: { id: true, codigo: true, nombre: true },
-        }),
-        prisma.torre.findMany({
-          orderBy: { codigo: 'asc' },
-          select: { id: true, proyectoId: true, codigo: true, nombre: true },
-        }),
-        prisma.piso.findMany({
-          orderBy: { numero: 'asc' },
-          select: { id: true, torreId: true, numero: true, nombre: true },
-        }),
-        prisma.zona.findMany({
-          orderBy: { codigo: 'asc' },
-          select: { id: true, pisoId: true, codigo: true, nombre: true },
-        }),
-        // Lo de baja viaja tambien, marcado con activo. Un filtro tiene que
-        // poder buscar por la cuadrilla que trabajo el mes pasado aunque hoy
-        // este desactivada; un formulario de alta, en cambio, solo ofrece las
-        // activas. Cada pantalla decide, aqui no se esconde nada.
-        prisma.actividad.findMany({
-          orderBy: { nombre: 'asc' },
-          select: { id: true, nombre: true, unidadMedida: true, activo: true },
-        }),
-        prisma.cuadrilla.findMany({
-          orderBy: { nombre: 'asc' },
-          select: { id: true, proyectoId: true, nombre: true, activo: true },
-        }),
-        prisma.trabajador.findMany({
-          orderBy: [{ apellido: 'asc' }, { nombre: 'asc' }],
-          select: { id: true, nombre: true, apellido: true, cargoId: true, activo: true },
-        }),
-        prisma.cargo.findMany({
-          orderBy: { nombre: 'asc' },
-          select: { id: true, nombre: true },
-        }),
-      ])
+    const conCombinaciones = new URL(request.url).searchParams.get('combinaciones') === '1'
 
-    return ok({ proyectos, torres, pisos, zonas, actividades, cuadrillas, trabajadores, cargos })
+    const [
+      proyectos,
+      torres,
+      pisos,
+      zonas,
+      actividades,
+      cuadrillas,
+      trabajadores,
+      cargos,
+      registros,
+    ] = await Promise.all([
+      prisma.proyecto.findMany({
+        orderBy: { codigo: 'asc' },
+        select: { id: true, codigo: true, nombre: true },
+      }),
+      prisma.torre.findMany({
+        orderBy: { codigo: 'asc' },
+        select: { id: true, proyectoId: true, codigo: true, nombre: true },
+      }),
+      prisma.piso.findMany({
+        orderBy: { numero: 'asc' },
+        select: { id: true, torreId: true, numero: true, nombre: true },
+      }),
+      prisma.zona.findMany({
+        orderBy: { codigo: 'asc' },
+        select: { id: true, pisoId: true, codigo: true, nombre: true },
+      }),
+      // Lo de baja viaja tambien, marcado con activo. Un filtro tiene que
+      // poder buscar por la cuadrilla que trabajo el mes pasado aunque hoy
+      // este desactivada; un formulario de alta, en cambio, solo ofrece las
+      // activas. Cada pantalla decide, aqui no se esconde nada.
+      prisma.actividad.findMany({
+        orderBy: { nombre: 'asc' },
+        select: { id: true, nombre: true, unidadMedida: true, activo: true },
+      }),
+      prisma.cuadrilla.findMany({
+        orderBy: { nombre: 'asc' },
+        select: { id: true, proyectoId: true, nombre: true, activo: true },
+      }),
+      prisma.trabajador.findMany({
+        orderBy: [{ apellido: 'asc' }, { nombre: 'asc' }],
+        select: { id: true, nombre: true, apellido: true, cargoId: true, activo: true },
+      }),
+      prisma.cargo.findMany({
+        orderBy: { nombre: 'asc' },
+        select: { id: true, nombre: true },
+      }),
+      // Solo identificadores, sin fechas: distinct deja una fila por cada
+      // frente, actividad, cuadrilla y trabajador que hayan coincidido, y no
+      // una por jornada. Con miles de registros sigue siendo una lista corta.
+      conCombinaciones
+        ? prisma.registroEjecucion.findMany({
+            distinct: ['frenteId', 'actividadId', 'cuadrillaId', 'trabajadorId'],
+            select: {
+              frenteId: true,
+              actividadId: true,
+              cuadrillaId: true,
+              trabajadorId: true,
+              frente: { select: { zonaId: true } },
+            },
+          })
+        : Promise.resolve(null),
+    ])
+
+    // Varios frentes de una misma zona dan la misma combinacion: se quedan
+    // con una sola.
+    let combinaciones: Array<[number, number, number, number | null]> | undefined
+    if (registros) {
+      const vistas = new Set<string>()
+      combinaciones = []
+      for (const r of registros) {
+        const clave = `${r.frente.zonaId}-${r.actividadId}-${r.cuadrillaId}-${r.trabajadorId}`
+        if (vistas.has(clave)) continue
+        vistas.add(clave)
+        combinaciones.push([r.frente.zonaId, r.actividadId, r.cuadrillaId, r.trabajadorId])
+      }
+    }
+
+    return ok({
+      proyectos,
+      torres,
+      pisos,
+      zonas,
+      actividades,
+      cuadrillas,
+      trabajadores,
+      cargos,
+      ...(combinaciones ? { combinaciones } : {}),
+    })
   } catch (error) {
     return manejarError(error)
   }

@@ -2,7 +2,7 @@
 node_modules/
 .pnp
 .pnp.js
- 
+
 # build
 .next/
 out/
@@ -11,8 +11,9 @@ next-env.d.ts
 *.tsbuildinfo
 
 # Entorno. Aqui viven la cadena de Neon y el secreto de NextAuth, asi que nada
-# de esto sale del equipo. La plantilla tampoco: las cuatro variables que hacen
-# falta estan explicadas en el README, en "Puesta en marcha".
+# de esto sale del equipo. La plantilla tampoco: las variables que hacen falta
+# estan explicadas en el README, en "Puesta en marcha", y en el comentario de
+# .env.example en el equipo.
 .env
 .env.example
 .env.local

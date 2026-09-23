@@ -6,6 +6,7 @@ import { Campo, Seleccion, Entrada } from '@/components/ui/input'
 import { AvisoError, PieFormulario, useEnvio } from './base'
 import { useRecurso } from '@/lib/cliente'
 import type { Trabajador } from '@/types/dominio'
+import { hoyTexto } from '@/lib/utils'
 
 export function FormAsignacion({
   abierto,
@@ -26,12 +27,12 @@ export function FormAsignacion({
   )
   const [form, setForm] = useState({
     trabajadorId: '',
-    fechaInicio: new Date().toISOString().slice(0, 10),
+    fechaInicio: hoyTexto(),
   })
 
   useEffect(() => {
     if (!abierto) return
-    setForm({ trabajadorId: '', fechaInicio: new Date().toISOString().slice(0, 10) })
+    setForm({ trabajadorId: '', fechaInicio: hoyTexto() })
   }, [abierto])
 
   const disponibles = trabajadores.filter((t) => !yaAsignados.includes(t.id))

@@ -106,9 +106,8 @@ export const esquemaActividad = z.object({
   nombre: texto(100, 'El nombre'),
   unidadMedida: texto(20, 'La unidad de medida'),
   descripcion: textoOpcional(255),
-  // Tarifa vigente por unidad ejecutada. Opcional porque una actividad puede
-  // darse de alta antes de que se le acuerde precio.
-  valorM2: decimalOpcional('El valor por unidad'),
+  // La actividad no lleva precio: el precio por metro se acuerda con cada
+  // trabajador y se captura en su ficha. Ver esquemaTrabajador.
   activo: z.boolean(),
 })
 
@@ -119,12 +118,32 @@ export const esquemaCargo = z.object({
 
 // --- Personal ---------------------------------------------------------------
 
+/** Un precio por metro para una actividad concreta de este trabajador. */
+const esquemaTarifa = z.object({
+  actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
+  valorM2: z.coerce
+    .number({ message: 'El precio debe ser un numero' })
+    .min(0, 'El precio no puede ser negativo')
+    .max(99999999.99, 'El precio es demasiado grande'),
+})
+
 export const esquemaTrabajador = z.object({
   documento: textoOpcional(30),
   nombre: texto(100, 'El nombre'),
   apellido: texto(100, 'El apellido'),
   cargoId: z.coerce.number().int().positive('Selecciona un cargo'),
   activo: z.boolean(),
+  /**
+   * Lo que se le paga por metro en cada actividad. La lista puede venir vacia:
+   * un trabajador puede darse de alta antes de acordar precios.
+   */
+  tarifas: z
+    .array(esquemaTarifa)
+    .optional()
+    .default([])
+    .refine((lista) => new Set(lista.map((t) => t.actividadId)).size === lista.length, {
+      message: 'Hay una actividad repetida: cada actividad lleva un solo precio',
+    }),
 })
 
 export const esquemaCuadrilla = z.object({
@@ -137,6 +156,11 @@ export const esquemaCuadrilla = z.object({
 export const esquemaAsignacion = z.object({
   trabajadorId: z.coerce.number().int().positive('Selecciona un trabajador'),
   fechaInicio: fecha('La fecha de inicio'),
+})
+
+/** Cierre de una asignacion. La fecha la pone el cliente, en su zona horaria. */
+export const esquemaCierreAsignacion = z.object({
+  fechaFin: fecha('La fecha de cierre'),
 })
 
 // --- Metas ------------------------------------------------------------------
@@ -191,6 +215,48 @@ export const esquemaUsuarioEdicion = z.object({
   activo: z.boolean(),
 })
 
+// --- Tareas asignadas -------------------------------------------------------
+
+/**
+ * El trabajo que se encarga antes de ejecutarlo. Lleva los mismos datos con los
+ * que luego se registra la jornada, y el registro los hereda copiados.
+ */
+export const esquemaTarea = z
+  .object({
+    frenteId: z.coerce.number().int().positive('Selecciona un frente de trabajo'),
+    actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
+    // Se puede programar el trabajo antes de saber quien lo hara.
+    cuadrillaId: z
+      .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
+      .optional()
+      .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
+    trabajadorId: z
+      .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
+      .optional()
+      .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
+    largo: z.coerce
+      .number({ message: 'El largo debe ser un numero' })
+      .gt(0, 'El largo debe ser mayor que cero')
+      .max(99999.99, 'El largo es demasiado grande'),
+    alto: z.coerce
+      .number({ message: 'El alto debe ser un numero' })
+      .gt(0, 'El alto debe ser mayor que cero')
+      .max(99999.99, 'El alto es demasiado grande'),
+    m2Meta: decimalOpcional('Los m2 meta').transform((v) => (v && v > 0 ? v : null)),
+    fechaInicioPlan: fechaOpcional,
+    fechaFinPlan: fechaOpcional,
+    estado: z.enum(ESTADOS_EJECUCION),
+    observaciones: textoOpcional(2000),
+  })
+  .refine(
+    (d) => !d.fechaInicioPlan || !d.fechaFinPlan || d.fechaFinPlan >= d.fechaInicioPlan,
+    { message: 'La fecha de fin no puede ser anterior a la de inicio', path: ['fechaFinPlan'] },
+  )
+  .refine((d) => !d.trabajadorId || Boolean(d.cuadrillaId), {
+    message: 'Para asignar un trabajador hay que elegir primero su cuadrilla',
+    path: ['trabajadorId'],
+  })
+
 // --- Registros de obra ------------------------------------------------------
 
 /** Campos que comparten el registro que abre la obra y los de avance. */
@@ -208,7 +274,10 @@ const camposJornada = {
   horaInicio: hora('La hora de inicio'),
   horaFinal: hora('La hora final'),
   tiempoRecesoMin: z.coerce.number().int().min(0, 'El receso no puede ser negativo').max(600),
-  m2Meta: decimalOpcional('Los m2 meta'),
+  // Una meta de cero no es una meta, es la ausencia de meta: se guarda nula
+  // para que la jornada quede fuera del cumplimiento en vez de contar como
+  // incumplida.
+  m2Meta: decimalOpcional('Los m2 meta').transform((v) => (v && v > 0 ? v : null)),
   observaciones: textoOpcional(2000),
 }
 
@@ -236,6 +305,15 @@ const recesoCabe = (d: { horaInicio: string; horaFinal: string; tiempoRecesoMin:
 export const esquemaRegistroObra = z
   .object({
     ...camposJornada,
+    /**
+     * La tarea de la que nace esta obra, si nace de una. Es opcional a
+     * proposito: se puede seguir abriendo obra directamente, y los registros
+     * que ya existian no tienen tarea detras.
+     */
+    tareaId: z
+      .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
+      .optional()
+      .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
     frenteId: z.coerce.number().int().positive('Selecciona un frente de trabajo'),
     actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
     largo: z.coerce

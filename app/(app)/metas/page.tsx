@@ -12,7 +12,7 @@ import { Seleccion } from '@/components/ui/input'
 import { AccionesEditarBorrar } from '@/components/ui/acciones'
 import { ConfirmarEliminacion } from '@/components/ui/modal'
 import { FormMeta } from '@/components/formularios/FormMeta'
-import { formatoFecha, formatoNumero } from '@/lib/utils'
+import { formatoFecha, formatoNumero, hoyTexto } from '@/lib/utils'
 import type { Meta, Proyecto } from '@/types/dominio'
 
 export default function MetasPage() {
@@ -31,7 +31,7 @@ export default function MetasPage() {
   const abrirNuevo = () => setForm({ abierto: true, registro: null })
 
   const vigente = (m: Meta) => {
-    const hoy = new Date().toISOString().slice(0, 10)
+    const hoy = hoyTexto()
     const desde = m.vigenciaDesde.slice(0, 10)
     const hasta = m.vigenciaHasta?.slice(0, 10)
     return desde <= hoy && (!hasta || hasta >= hoy)

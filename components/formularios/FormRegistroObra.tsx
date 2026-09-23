@@ -5,14 +5,24 @@ import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion, AreaTexto } from '@/components/ui/input'
 import { AvisoError, PieFormulario, useEnvio } from './base'
 import { pedir, useRecurso, useRecursoUnico } from '@/lib/cliente'
-import { fechaParaInput, formatoNumero, formatoPorcentaje } from '@/lib/utils'
+import {
+  fechaParaInput,
+  formatoMoneda,
+  formatoNumero,
+  formatoPorcentaje,
+  hoyTexto,
+} from '@/lib/utils'
 import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib/calculos'
-import type { Catalogos, Cuadrilla, Frente, Meta, Registro } from '@/types/dominio'
+import { crearEtiquetas } from '@/lib/etiquetas'
+import type { Catalogos, Cuadrilla, Frente, Meta, Registro, Tarea } from '@/types/dominio'
 
-const hoy = () => new Date().toISOString().slice(0, 10)
+// La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
+const hoy = hoyTexto
 
 const vacio = {
   fechaEjecucion: hoy(),
+  /** La tarea asignada de la que nace esta obra. Vacio: obra sin tarea detras. */
+  tareaId: '',
   proyectoId: '',
   torreId: '',
   pisoId: '',
@@ -71,6 +81,13 @@ export function FormRegistroObra({
     abierto && form.cuadrillaId ? `/api/cuadrillas/${form.cuadrillaId}` : null,
   )
 
+  /**
+   * Las tareas que todavia no han dado lugar a una obra: son las que se pueden
+   * elegir aqui. Una tarea da una sola obra, asi que en cuanto se registra
+   * desaparece de la lista.
+   */
+  const tareas = useRecurso<Tarea>(abierto ? '/api/tareas?sinObra=1' : null)
+
   const proyectos = catalogos?.proyectos ?? []
 
   // Un registro nuevo solo puede usar catalogo vigente.
@@ -109,8 +126,60 @@ export function FormRegistroObra({
   )
 
   const integrantes = (cuadrilla.dato?.integrantes ?? []).filter((i) => i.activo)
+  // Las opciones se escriben como en el panel: torre, piso, zona y cuadrilla
+  // llevan detras el codigo de su proyecto.
+  const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
+
   const trabajadorElegido = integrantes.find((i) => String(i.trabajadorId) === form.trabajadorId)
+
+  /**
+   * El precio de esta jornada: el que tiene ESE trabajador para ESA actividad.
+   * Si no hay ninguno, la jornada se guarda igual pero sin importe, y conviene
+   * decirlo antes de guardar y no al liquidar.
+   */
+  const tarifaJornada = form.actividadId
+    ? (trabajadorElegido?.trabajador?.tarifas ?? []).find(
+        (t) => t.actividadId === Number(form.actividadId),
+      )
+    : undefined
+  const faltaTarifa = Boolean(form.trabajadorId && form.actividadId && !tarifaJornada)
   const cargoId = trabajadorElegido?.trabajador?.cargo.id ?? null
+
+  /**
+   * Heredar la tarea: se copian sus datos al formulario de una vez, incluida la
+   * ubicacion completa, que se reconstruye desde el frente.
+   *
+   * Se copian, no se enlazan: si ese dia fue otra cuadrilla o el muro midio dos
+   * centimetros menos, el residente lo corrige aqui y la tarea se queda como
+   * estaba. Lo unico que la API exige que coincida es el frente y la actividad.
+   */
+  const heredarTarea = (tareaId: string) => {
+    const tarea = tareas.datos.find((t) => String(t.id) === tareaId)
+    if (!tarea) {
+      cambiar({ tareaId: '' })
+      return
+    }
+    const zona = tarea.frente?.zona
+    cambiar({
+      tareaId,
+      proyectoId: zona ? String(zona.piso.torre.proyecto.id) : '',
+      torreId: zona ? String(zona.piso.torre.id) : '',
+      pisoId: zona ? String(zona.piso.id) : '',
+      zonaId: zona ? String(zona.id) : '',
+      frenteId: String(tarea.frenteId),
+      actividadId: String(tarea.actividadId),
+      cuadrillaId: tarea.cuadrillaId ? String(tarea.cuadrillaId) : '',
+      trabajadorId: tarea.trabajadorId ? String(tarea.trabajadorId) : '',
+      largo: String(tarea.largo),
+      alto: String(tarea.alto),
+      m2Meta: tarea.m2Meta === null ? '' : String(tarea.m2Meta),
+    })
+    // La meta viene de la tarea: no hay que volver a proponerla desde las metas
+    // vigentes del proyecto.
+    if (tarea.m2Meta !== null) setMetaTocada(true)
+  }
+
+  const tareaElegida = tareas.datos.find((t) => String(t.id) === form.tareaId)
 
   useEffect(() => {
     if (!abierto) return
@@ -123,6 +192,7 @@ export function FormRegistroObra({
 
     const zona = registro.frente?.zona
     setForm({
+      tareaId: registro.tareaId ? String(registro.tareaId) : '',
       fechaEjecucion: fechaParaInput(registro.fechaEjecucion),
       proyectoId: String(zona?.piso.torre.proyecto.id ?? ''),
       torreId: String(zona?.piso.torre.id ?? ''),
@@ -171,7 +241,9 @@ export function FormRegistroObra({
 
     const jornada = indicadoresJornada({
       m2Ejecutados: form.m2Ejecutados || 0,
-      m2Meta: form.m2Meta || 0,
+      // Vacio significa "sin meta", no "meta cero": una jornada sin meta se
+      // queda fuera del cumplimiento en vez de contar como incumplida.
+      m2Meta: form.m2Meta,
       horaInicio: horaADate(form.horaInicio),
       horaFinal: horaADate(form.horaFinal),
       tiempoRecesoMin: Number(form.tiempoRecesoMin) || 0,
@@ -212,6 +284,42 @@ export function FormRegistroObra({
     >
       <form onSubmit={enviarFormulario} className="space-y-5">
         <AvisoError mensaje={errorGeneral} />
+
+        {/* --- La tarea que se va a ejecutar ------------------------------- */}
+        {!registro && (
+          <section>
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
+              Tarea asignada
+            </h3>
+            <Campo etiqueta="Tarea" error={errores.tareaId}>
+              <Seleccion value={form.tareaId} onChange={(e) => heredarTarea(e.target.value)}>
+                <option value="">Sin tarea: se captura a mano</option>
+                {tareas.datos.map((t) => {
+                  const zona = t.frente?.zona
+                  return (
+                    <option key={t.id} value={t.id}>
+                      {t.codigo} · {t.actividad?.nombre} · {t.frente?.codigoDwg}
+                      {zona
+                        ? ` ${zona.nombre} (${zona.piso.torre.nombre} - ${zona.piso.torre.proyecto.codigo})`
+                        : ''}
+                    </option>
+                  )
+                })}
+              </Seleccion>
+              <p className="mt-1.5 text-xs text-obra-500">
+                {tareaElegida
+                  ? 'Los datos de la tarea ya estan abajo. Si ese dia cambio algo, corrigelo: la tarea se queda como esta.'
+                  : 'Elegir una tarea rellena ubicacion, actividad, personal, medidas y meta. Tambien se puede abrir obra sin tarea.'}
+              </p>
+            </Campo>
+          </section>
+        )}
+
+        {registro?.tarea && (
+          <p className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2 text-xs text-obra-600">
+            Esta obra nacio de la tarea {registro.tarea.codigo}.
+          </p>
+        )}
 
         <section>
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
@@ -264,7 +372,7 @@ export function FormRegistroObra({
                 <option value="">Selecciona...</option>
                 {torres.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {t.nombre}
+                    {etiquetas.torre(t)}
                   </option>
                 ))}
               </Seleccion>
@@ -280,7 +388,7 @@ export function FormRegistroObra({
                 <option value="">Selecciona...</option>
                 {pisos.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.nombre || `Piso ${p.numero}`}
+                    {etiquetas.piso(p)}
                   </option>
                 ))}
               </Seleccion>
@@ -296,7 +404,7 @@ export function FormRegistroObra({
                 <option value="">Selecciona...</option>
                 {zonas.map((z) => (
                   <option key={z.id} value={z.id}>
-                    {z.nombre}
+                    {etiquetas.zona(z)}
                   </option>
                 ))}
               </Seleccion>
@@ -350,7 +458,7 @@ export function FormRegistroObra({
                 <option value="">Selecciona...</option>
                 {cuadrillas.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.nombre}
+                    {etiquetas.cuadrilla(c)}
                   </option>
                 ))}
               </Seleccion>
@@ -374,6 +482,16 @@ export function FormRegistroObra({
           {trabajadorElegido?.trabajador && (
             <p className="mt-2 text-xs text-obra-500">
               Cargo: {trabajadorElegido.trabajador.cargo.nombre}
+              {tarifaJornada &&
+                ` · ${formatoMoneda(tarifaJornada.valorM2)} por unidad en esta actividad`}
+            </p>
+          )}
+
+          {faltaTarifa && (
+            <p className="mt-2 rounded-lg border border-acento-200 bg-acento-50 px-3 py-2 text-xs text-acento-800">
+              {trabajadorElegido?.trabajador?.nombre ?? 'Este trabajador'} no tiene precio
+              acordado para esta actividad, asi que la jornada se guardara sin importe. Se
+              arregla en su ficha, en la seccion Trabajadores.
             </p>
           )}
         </section>

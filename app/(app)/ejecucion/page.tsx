@@ -28,7 +28,15 @@ import { FormRegistroAvance } from '@/components/formularios/FormRegistroAvance'
 import { DetalleRegistro } from '@/components/DetalleRegistro'
 import { Indicador } from '@/components/Indicador'
 import { indicadoresJornada, formatoDuracion } from '@/lib/calculos'
+import {
+  conciliar,
+  expandirFilas,
+  opcionesDisponibles,
+  type Dimension,
+  type Seleccion as SeleccionFiltros,
+} from '@/lib/filtrosRelacionales'
 import { codigosDeRegistro, formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
+import { crearEtiquetas } from '@/lib/etiquetas'
 import type { Catalogos, ListaRegistros, Registro } from '@/types/dominio'
 
 const filtrosVacios = {
@@ -39,6 +47,31 @@ const filtrosVacios = {
   desde: '',
   hasta: '',
 }
+
+/**
+ * Los filtros de esta pantalla son los mismos cuatro que los del panel, asi
+ * que se condicionan igual: cada uno solo ofrece lo que tiene registros
+ * detras. La seleccion se traduce a las ocho dimensiones que entiende
+ * lib/filtrosRelacionales, y de vuelta solo se leen las cuatro de aqui.
+ */
+const SELECCION_VACIA: SeleccionFiltros = {
+  proyectoId: '',
+  torreId: '',
+  pisoId: '',
+  zonaId: '',
+  actividadId: '',
+  cuadrillaId: '',
+  trabajadorId: '',
+  cargoId: '',
+}
+
+const aSeleccion = (f: typeof filtrosVacios): SeleccionFiltros => ({
+  ...SELECCION_VACIA,
+  proyectoId: f.proyectoId,
+  torreId: f.torreId,
+  actividadId: f.actividadId,
+  cuadrillaId: f.cuadrillaId,
+})
 
 export default function EjecucionPage() {
   const [filtros, setFiltros] = useState(filtrosVacios)
@@ -64,27 +97,78 @@ export default function EjecucionPage() {
   const datos = useMemo(() => dato?.registros ?? [], [dato])
   const resumen = dato?.resumen
 
-  /** Un solo viaje para los desplegables, en vez de uno por catalogo. */
-  const { dato: catalogos } = useRecursoUnico<Catalogos>('/api/catalogos')
+  /**
+   * Un solo viaje para los desplegables, con las combinaciones reales de los
+   * registros: con ellas los filtros se condicionan entre si sin volver al
+   * servidor, igual que en el panel.
+   */
+  const { dato: catalogos } = useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
 
-  const proyectos = catalogos?.proyectos ?? []
-  const actividades = catalogos?.actividades ?? []
+  const filas = useMemo(
+    () => (catalogos?.combinaciones ? expandirFilas(catalogos, catalogos.combinaciones) : []),
+    [catalogos],
+  )
 
+  const disponibles = useMemo(
+    () => opcionesDisponibles(filas, aSeleccion(filtros)),
+    [filas, filtros],
+  )
+
+  // Las opciones se escriben como en el panel: lo que cuelga de un proyecto
+  // lleva su codigo detras de un guion.
+  const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
+
+  // Lo que no tiene registros desaparece de la lista, en vez de quedar en gris.
+  // Mientras los catalogos no hayan llegado no se descarta nada.
+  const soloDisponibles = <T extends { id: number }>(dimension: Dimension, lista: T[]) =>
+    filas.length === 0 ? lista : lista.filter((x) => disponibles[dimension].has(x.id))
+
+  const proyectos = soloDisponibles('proyectoId', catalogos?.proyectos ?? [])
+  const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? [])
+
+  // La torre ya no espera a que se elija proyecto: si solo hay obra en una, es
+  // la unica que se ofrece, y elegirla deja el proyecto implicito.
   const torres = useMemo(
     () =>
-      filtros.proyectoId
-        ? (catalogos?.torres ?? []).filter((t) => t.proyectoId === Number(filtros.proyectoId))
-        : [],
-    [catalogos, filtros.proyectoId],
+      soloDisponibles(
+        'torreId',
+        (catalogos?.torres ?? []).filter(
+          (t) => !filtros.proyectoId || t.proyectoId === Number(filtros.proyectoId),
+        ),
+      ),
+    [catalogos, filtros.proyectoId, filas, disponibles],
   )
 
   const cuadrillas = useMemo(
     () =>
-      (catalogos?.cuadrillas ?? []).filter(
-        (c) => !filtros.proyectoId || c.proyectoId === Number(filtros.proyectoId),
+      soloDisponibles(
+        'cuadrillaId',
+        (catalogos?.cuadrillas ?? []).filter(
+          (c) => !filtros.proyectoId || c.proyectoId === Number(filtros.proyectoId),
+        ),
       ),
-    [catalogos, filtros.proyectoId],
+    [catalogos, filtros.proyectoId, filas, disponibles],
   )
+
+  /**
+   * Todo cambio de filtro pasa por aqui: lo que se acaba de elegir manda, y lo
+   * que ya no cuadra con ello se suelta solo.
+   */
+  const cambiar = (campos: Partial<typeof filtrosVacios>) =>
+    setFiltros((f) => {
+      const propuesta = { ...f, ...campos }
+      const dimensiones = Object.keys(campos).filter((k) => k in SELECCION_VACIA)
+      if (dimensiones.length === 0) return propuesta
+
+      const conciliada = conciliar(filas, aSeleccion(propuesta), dimensiones)
+      return {
+        ...propuesta,
+        proyectoId: conciliada.proyectoId,
+        torreId: conciliada.torreId,
+        actividadId: conciliada.actividadId,
+        cuadrillaId: conciliada.cuadrillaId,
+      }
+    })
 
   /**
    * Al guardar, la fila se pone en pantalla de inmediato y el resumen se pone
@@ -262,9 +346,7 @@ export default function EjecucionPage() {
         <TarjetaCuerpo className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <Seleccion
             value={filtros.proyectoId}
-            onChange={(e) =>
-              setFiltros({ ...filtros, proyectoId: e.target.value, torreId: '', cuadrillaId: '' })
-            }
+            onChange={(e) => cambiar({ proyectoId: e.target.value })}
           >
             <option value="">Todos los proyectos</option>
             {proyectos.map((p) => (
@@ -276,20 +358,19 @@ export default function EjecucionPage() {
 
           <Seleccion
             value={filtros.torreId}
-            onChange={(e) => setFiltros({ ...filtros, torreId: e.target.value })}
-            disabled={!filtros.proyectoId}
+            onChange={(e) => cambiar({ torreId: e.target.value })}
           >
             <option value="">Todas las torres</option>
             {torres.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.nombre}
+                {etiquetas.torre(t)}
               </option>
             ))}
           </Seleccion>
 
           <Seleccion
             value={filtros.actividadId}
-            onChange={(e) => setFiltros({ ...filtros, actividadId: e.target.value })}
+            onChange={(e) => cambiar({ actividadId: e.target.value })}
           >
             <option value="">Todas las actividades</option>
             {actividades.map((a) => (
@@ -301,12 +382,12 @@ export default function EjecucionPage() {
 
           <Seleccion
             value={filtros.cuadrillaId}
-            onChange={(e) => setFiltros({ ...filtros, cuadrillaId: e.target.value })}
+            onChange={(e) => cambiar({ cuadrillaId: e.target.value })}
           >
             <option value="">Todas las cuadrillas</option>
             {cuadrillas.map((c) => (
               <option key={c.id} value={c.id}>
-                {c.nombre}
+                {etiquetas.cuadrilla(c)}
               </option>
             ))}
           </Seleccion>
@@ -314,14 +395,14 @@ export default function EjecucionPage() {
           <Entrada
             type="date"
             value={filtros.desde}
-            onChange={(e) => setFiltros({ ...filtros, desde: e.target.value })}
+            onChange={(e) => cambiar({ desde: e.target.value })}
             title="Desde"
           />
           <div className="flex gap-2">
             <Entrada
               type="date"
               value={filtros.hasta}
-              onChange={(e) => setFiltros({ ...filtros, hasta: e.target.value })}
+              onChange={(e) => cambiar({ hasta: e.target.value })}
               title="Hasta"
             />
             {hayFiltros && (
@@ -357,7 +438,7 @@ export default function EjecucionPage() {
             <Indicador
               etiqueta="Avance"
               valor={formatoPorcentaje(resumen.avance)}
-              detalle={`sobre ${formatoNumero(resumen.m2Totales)} m2`}
+              detalle={`acumulado sobre ${formatoNumero(resumen.m2Totales)} m2`}
               icono={Percent}
             />
             <Indicador

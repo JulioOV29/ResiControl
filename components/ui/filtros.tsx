@@ -63,7 +63,15 @@ export function BarraFiltros({
   )
 }
 
-/** Un desplegable con su etiqueta dentro de la pastilla. */
+/**
+ * Un desplegable con su etiqueta dentro de la pastilla.
+ *
+ * El <select> ocupa la pastilla ENTERA, con la etiqueta encima y sin capturar
+ * el clic. Antes la pastilla era un <label> y el desplegable solo cubria el
+ * texto del valor: pulsar en el borde, en la etiqueta o en la flecha enfocaba
+ * el control pero no lo abria, asi que habia que acertarle justo a la palabra
+ * "Todos". Ahora vale cualquier punto de la pastilla.
+ */
 export function FiltroSeleccion({
   etiqueta,
   value,
@@ -78,9 +86,9 @@ export function FiltroSeleccion({
   children: React.ReactNode
 }) {
   return (
-    <label
+    <div
       className={cn(
-        'group relative flex min-w-0 items-center gap-2 rounded-lg border px-3 py-1.5 transition-colors',
+        'relative flex min-w-0 rounded-lg border transition-colors',
         disabled
           ? 'border-obra-100 bg-obra-50'
           : value
@@ -88,39 +96,45 @@ export function FiltroSeleccion({
             : 'border-obra-200 bg-white hover:border-obra-300',
       )}
     >
-      <span className="min-w-0">
-        <span
-          className={cn(
-            'block text-[10px] font-medium uppercase tracking-wide',
-            value ? 'text-marca-700' : 'text-obra-400',
-          )}
-        >
-          {etiqueta}
-        </span>
-        <select
-          value={value}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.value)}
-          className={cn(
-            'block w-full cursor-pointer appearance-none truncate bg-transparent pr-5 text-sm font-medium',
-            'focus:outline-none focus-visible:underline',
-            disabled ? 'text-obra-400' : 'text-obra-900',
-          )}
-        >
-          {children}
-        </select>
+      {/* pointer-events-none: la etiqueta se ve, pero el clic pasa al select */}
+      <span
+        className={cn(
+          'pointer-events-none absolute left-3 top-1 text-[10px] font-medium uppercase tracking-wide',
+          value ? 'text-marca-700' : 'text-obra-400',
+        )}
+      >
+        {etiqueta}
       </span>
+
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          'w-full min-w-0 appearance-none truncate rounded-lg bg-transparent pb-1.5 pl-3 pr-7 pt-5 text-sm font-medium',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-marca-300',
+          disabled ? 'cursor-not-allowed text-obra-400' : 'cursor-pointer text-obra-900',
+        )}
+      >
+        {children}
+      </select>
+
       <ChevronDown
         className={cn(
-          'pointer-events-none absolute right-2.5 h-3.5 w-3.5',
+          'pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2',
           disabled ? 'text-obra-300' : 'text-obra-400',
         )}
       />
-    </label>
+    </div>
   )
 }
 
-/** Un campo de fecha con su etiqueta dentro de la pastilla. */
+/**
+ * Un campo de fecha con su etiqueta dentro de la pastilla.
+ *
+ * Mismo criterio que el desplegable: el input cubre toda la pastilla, y al
+ * pulsarla se abre el calendario en vez de dejar el cursor en el dia.
+ */
 export function FiltroFecha({
   etiqueta,
   value,
@@ -135,32 +149,35 @@ export function FiltroFecha({
   max?: string
 }) {
   return (
-    <label
+    <div
       className={cn(
-        'flex min-w-0 items-center rounded-lg border px-3 py-1.5 transition-colors',
+        'relative flex min-w-0 rounded-lg border transition-colors',
         value
           ? 'border-marca-200 bg-marca-50 hover:border-marca-300'
           : 'border-obra-200 bg-white hover:border-obra-300',
       )}
     >
-      <span className="min-w-0">
-        <span
-          className={cn(
-            'block text-[10px] font-medium uppercase tracking-wide',
-            value ? 'text-marca-700' : 'text-obra-400',
-          )}
-        >
-          {etiqueta}
-        </span>
-        <input
-          type="date"
-          value={value}
-          min={min}
-          max={max}
-          onChange={(e) => onChange(e.target.value)}
-          className="block w-full cursor-pointer bg-transparent text-sm font-medium text-obra-900 focus:outline-none"
-        />
+      <span
+        className={cn(
+          'pointer-events-none absolute left-3 top-1 text-[10px] font-medium uppercase tracking-wide',
+          value ? 'text-marca-700' : 'text-obra-400',
+        )}
+      >
+        {etiqueta}
       </span>
-    </label>
+
+      <input
+        type="date"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(e.target.value)}
+        // showPicker abre el calendario desde cualquier punto del campo. No
+        // esta en todos los navegadores, y donde no esta el campo sigue
+        // funcionando como siempre.
+        onClick={(e) => e.currentTarget.showPicker?.()}
+        className="w-full min-w-0 cursor-pointer rounded-lg bg-transparent pb-1.5 pl-3 pr-3 pt-5 text-sm font-medium text-obra-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-marca-300"
+      />
+    </div>
   )
 }

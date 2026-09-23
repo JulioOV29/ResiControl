@@ -22,6 +22,9 @@ export async function GET(_request: Request, { params }: Contexto) {
                 apellido: true,
                 documento: true,
                 cargo: { select: { id: true, nombre: true } },
+                // Sus precios por metro: el formulario de registro los usa para
+                // avisar cuando la jornada se va a guardar sin importe.
+                tarifas: { select: { actividadId: true, valorM2: true } },
               },
             },
           },

@@ -1,7 +1,17 @@
 import { prisma } from '@/lib/prisma'
 import { ok, manejarError, exigirSesion, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
 import { esquemaRegistroObra, esquemaRegistroAvance } from '@/lib/esquemas'
-import { relacionesRegistro, aHora, estadoDeObra, tarifaDeActividad } from '@/lib/consultas'
+import {
+  relacionesRegistro,
+  aHora,
+  estadoDeObra,
+  tarifaDeTrabajador,
+  validarCoherencia,
+  validarFechaEnCadena,
+  validarTareaParaObra,
+  sincronizarEstadoTarea,
+  tareaDeLaObra,
+} from '@/lib/consultas'
 
 type Contexto = { params: Promise<{ id: string }> }
 
@@ -32,6 +42,9 @@ export async function PUT(request: Request, { params }: Contexto) {
         registroOrigenId: true,
         registroAnteriorId: true,
         actividadId: true,
+        frenteId: true,
+        trabajadorId: true,
+        tareaId: true,
       },
     })
     if (!actual) throw new ErrorApi(404, 'El registro no existe')
@@ -41,7 +54,13 @@ export async function PUT(request: Request, { params }: Contexto) {
     const raizId = actual.registroOrigenId ?? actual.id
 
     if (esApertura) {
-      const { horaInicio, horaFinal, ...datos } = esquemaRegistroObra.parse(cuerpo)
+      const { horaInicio, horaFinal, tareaId, ...datos } = esquemaRegistroObra.parse(cuerpo)
+
+      await validarCoherencia(datos)
+      await validarFechaEnCadena(actual, datos.fechaEjecucion)
+      // La obra puede ganar, perder o cambiar de tarea; la tarea nueva tiene
+      // que estar libre y coincidir en frente y actividad.
+      if (tareaId) await validarTareaParaObra(tareaId, datos, id)
 
       // Reducir el area por debajo de lo ya ejecutado en la cadena dejaria la
       // obra por encima del 100%.
@@ -55,22 +74,75 @@ export async function PUT(request: Request, { params }: Contexto) {
         )
       }
 
-      // La tarifa congelada solo se vuelve a leer si cambio la actividad: en
-      // ese caso la que estaba guardada era la de otro trabajo. Corregir una
-      // hora o unos metros no puede repreciar la jornada.
+      /**
+       * La tarifa congelada solo se vuelve a leer si cambio la actividad o el
+       * trabajador: en ese caso la guardada era la de otro trabajo o la de
+       * otra persona. Corregir una hora o unos metros no puede repreciar la
+       * jornada.
+       */
       const cambioActividad = datos.actividadId !== actual.actividadId
+      const cambioFrente = datos.frenteId !== actual.frenteId
+      const cambioTrabajador = datos.trabajadorId !== actual.trabajadorId
+      const recalcular = cambioActividad || cambioTrabajador
 
-      const actualizado = await prisma.registroEjecucion.update({
-        where: { id },
-        data: {
-          ...datos,
-          ...(cambioActividad ? { valorM2: await tarifaDeActividad(datos.actividadId) } : {}),
-          horaInicio: aHora(horaInicio),
-          horaFinal: aHora(horaFinal),
-          usuarioActualizaId: sesion.user.id,
-        },
-        include: relacionesRegistro,
-      })
+      /**
+       * Los avances heredan frente y actividad al crearse, asi que corregirlos
+       * en la apertura tiene que arrastrar la cadena entera: si no, el mismo
+       * muro quedaba repartido entre dos ubicaciones o dos actividades.
+       *
+       * Si cambia la actividad, cada avance tiene que reprecarse con la tarifa
+       * de SU trabajador, que no tiene por que ser el de la apertura: dias
+       * distintos de la misma obra los puede hacer gente distinta.
+       */
+      const avances =
+        cambioActividad || cambioFrente
+          ? await prisma.registroEjecucion.findMany({
+              where: { registroOrigenId: id },
+              select: { id: true, trabajadorId: true },
+            })
+          : []
+
+      const [tarifaPropia, ...tarifasAvances] = await Promise.all([
+        recalcular
+          ? tarifaDeTrabajador(datos.trabajadorId, datos.actividadId)
+          : Promise.resolve(null),
+        ...avances.map((a) =>
+          cambioActividad
+            ? tarifaDeTrabajador(a.trabajadorId, datos.actividadId)
+            : Promise.resolve(null),
+        ),
+      ])
+
+      const [actualizado] = await prisma.$transaction([
+        prisma.registroEjecucion.update({
+          where: { id },
+          data: {
+            ...datos,
+            tareaId,
+            ...(recalcular ? { valorM2: tarifaPropia } : {}),
+            horaInicio: aHora(horaInicio),
+            horaFinal: aHora(horaFinal),
+            usuarioActualizaId: sesion.user.id,
+          },
+          include: relacionesRegistro,
+        }),
+        ...avances.map((a, indice) =>
+          prisma.registroEjecucion.update({
+            where: { id: a.id },
+            data: {
+              frenteId: datos.frenteId,
+              actividadId: datos.actividadId,
+              ...(cambioActividad ? { valorM2: tarifasAvances[indice] } : {}),
+              usuarioActualizaId: sesion.user.id,
+            },
+          }),
+        ),
+      ])
+
+      // Las dos tareas implicadas: la que se suelta y la que se toma.
+      if (actual.tareaId !== tareaId) await sincronizarEstadoTarea(actual.tareaId)
+      await sincronizarEstadoTarea(tareaId)
+
       return ok(actualizado)
     }
 
@@ -78,6 +150,14 @@ export async function PUT(request: Request, { params }: Contexto) {
     const { horaInicio, horaFinal, registroAnteriorId, ...datos } =
       esquemaRegistroAvance.parse({ ...cuerpo, registroAnteriorId: actual.registroAnteriorId })
     void registroAnteriorId
+
+    await validarCoherencia({
+      frenteId: actual.frenteId,
+      cuadrillaId: datos.cuadrillaId,
+      trabajadorId: datos.trabajadorId,
+      fechaEjecucion: datos.fechaEjecucion,
+    })
+    await validarFechaEnCadena(actual, datos.fechaEjecucion)
 
     const obra = await estadoDeObra(raizId, id)
     if (obra && datos.m2Ejecutados > obra.pendiente + 0.005) {
@@ -87,10 +167,18 @@ export async function PUT(request: Request, { params }: Contexto) {
       )
     }
 
+    // Si la jornada cambia de trabajador, cambia lo que se paga por ella: la
+    // tarifa congelada era la de la persona anterior.
+    const cambioTrabajadorAvance = datos.trabajadorId !== actual.trabajadorId
+    const tarifaAvance = cambioTrabajadorAvance
+      ? await tarifaDeTrabajador(datos.trabajadorId, actual.actividadId)
+      : null
+
     const actualizado = await prisma.registroEjecucion.update({
       where: { id },
       data: {
         ...datos,
+        ...(cambioTrabajadorAvance ? { valorM2: tarifaAvance } : {}),
         horaInicio: aHora(horaInicio),
         horaFinal: aHora(horaFinal),
         // Trazabilidad: queda quien creo y quien modifico por ultima vez.
@@ -98,6 +186,8 @@ export async function PUT(request: Request, { params }: Contexto) {
       },
       include: relacionesRegistro,
     })
+
+    await sincronizarEstadoTarea(await tareaDeLaObra(raizId))
 
     return ok(actualizado)
   } catch (error) {
@@ -115,6 +205,7 @@ export async function DELETE(_request: Request, { params }: Contexto) {
       select: {
         codigoRegistro: true,
         registroOrigenId: true,
+        tareaId: true,
         continuacion: { select: { codigoRegistro: true } },
         _count: { select: { avances: true } },
       },
@@ -136,7 +227,19 @@ export async function DELETE(_request: Request, { params }: Contexto) {
       )
     }
 
+    // La tarea de la obra se lee ANTES de borrar: si lo que se borra es la
+    // apertura, despues ya no habria de donde sacarla.
+    const tareaId =
+      registro.registroOrigenId === null
+        ? registro.tareaId
+        : await tareaDeLaObra(registro.registroOrigenId)
+
     await prisma.registroEjecucion.delete({ where: { id } })
+
+    // Al deshacer una jornada la tarea puede volver a EN_PROCESO, o a
+    // PENDIENTE si se borro la obra entera.
+    await sincronizarEstadoTarea(tareaId)
+
     return ok({ mensaje: 'Registro eliminado' })
   } catch (error) {
     return manejarError(error)

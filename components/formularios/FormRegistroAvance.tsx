@@ -5,11 +5,20 @@ import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion, AreaTexto } from '@/components/ui/input'
 import { AvisoError, PieFormulario, useEnvio } from './base'
 import { pedir, useRecurso, useRecursoUnico } from '@/lib/cliente'
-import { fechaParaInput, formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
+import {
+  fechaParaInput,
+  formatoFecha,
+  formatoMoneda,
+  formatoNumero,
+  formatoPorcentaje,
+  hoyTexto,
+} from '@/lib/utils'
 import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib/calculos'
+import { conProyecto } from '@/lib/etiquetas'
 import type { Cuadrilla, Meta, Obra, Registro } from '@/types/dominio'
 
-const hoy = () => new Date().toISOString().slice(0, 10)
+// La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
+const hoy = hoyTexto
 
 /** El dia siguiente a una fecha en formato aaaa-mm-dd. */
 const diaSiguiente = (fecha: string) => {
@@ -71,6 +80,18 @@ export function FormRegistroAvance({
   const integrantes = (cuadrilla.dato?.integrantes ?? []).filter((i) => i.activo)
   const trabajadorElegido = integrantes.find((i) => String(i.trabajadorId) === form.trabajadorId)
   const cargoId = trabajadorElegido?.trabajador?.cargo.id ?? null
+
+  /**
+   * La actividad la hereda la obra, asi que el precio de esta jornada es el que
+   * tiene el trabajador elegido para la actividad de la obra. Sin precio la
+   * jornada se guarda igual, pero sin importe, y se avisa antes de guardar.
+   */
+  const tarifaJornada = obra
+    ? (trabajadorElegido?.trabajador?.tarifas ?? []).find(
+        (t) => t.actividadId === obra.actividadId,
+      )
+    : undefined
+  const faltaTarifa = Boolean(obra && form.trabajadorId && !tarifaJornada)
 
   useEffect(() => {
     if (!abierto) return
@@ -156,7 +177,9 @@ export function FormRegistroAvance({
 
     const jornada = indicadoresJornada({
       m2Ejecutados: form.m2Ejecutados || 0,
-      m2Meta: form.m2Meta || 0,
+      // Vacio significa "sin meta", no "meta cero": una jornada sin meta se
+      // queda fuera del cumplimiento en vez de contar como incumplida.
+      m2Meta: form.m2Meta,
       horaInicio: horaADate(form.horaInicio),
       horaFinal: horaADate(form.horaFinal),
       tiempoRecesoMin: Number(form.tiempoRecesoMin) || 0,
@@ -317,7 +340,7 @@ export function FormRegistroAvance({
                 <option value="">Selecciona...</option>
                 {cuadrillas.datos.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.nombre}
+                    {conProyecto(c.nombre, c.proyecto?.codigo)}
                   </option>
                 ))}
               </Seleccion>
@@ -337,6 +360,22 @@ export function FormRegistroAvance({
               </Seleccion>
             </Campo>
           </div>
+
+          {trabajadorElegido?.trabajador && (
+            <p className="mt-2 text-xs text-obra-500">
+              Cargo: {trabajadorElegido.trabajador.cargo.nombre}
+              {tarifaJornada &&
+                ` · ${formatoMoneda(tarifaJornada.valorM2)} por unidad en ${obra?.actividad?.nombre ?? 'esta actividad'}`}
+            </p>
+          )}
+
+          {faltaTarifa && (
+            <p className="mt-2 rounded-lg border border-acento-200 bg-acento-50 px-3 py-2 text-xs text-acento-800">
+              {trabajadorElegido?.trabajador?.nombre ?? 'Este trabajador'} no tiene precio
+              acordado para {obra?.actividad?.nombre ?? 'esta actividad'}, asi que la jornada se
+              guardara sin importe. Se arregla en su ficha, en la seccion Trabajadores.
+            </p>
+          )}
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <Campo etiqueta="m2 ejecutados hoy" error={errores.m2Ejecutados} requerido>

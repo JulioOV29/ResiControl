@@ -204,58 +204,120 @@ export function areaDeObra(registro: JornadaEncadenada) {
   return num(registro.largo) * num(registro.alto)
 }
 
-export interface IndicadoresAgregados {
-  registros: number
+export interface EstadoObras {
   obras: number
+  /** Area total de las obras, contada una sola vez por obra. */
   m2Totales: number
-  m2Ejecutados: number
+  /** Lo ejecutado en TODA la cadena, no solo en el periodo filtrado. */
+  m2Acumulados: number
   m2Pendientes: number
+  avance: number | null
+  obrasTerminadas: number
+}
+
+/**
+ * Estado de un conjunto de obras a partir de sus CADENAS COMPLETAS.
+ *
+ * Existe porque el avance y el pendiente no son indicadores de periodo: si el
+ * filtro cubre una semana, lo producido esa semana es la produccion, pero lo
+ * que falta de un muro depende de todo lo que se hizo en el, tambien antes del
+ * lunes. Mezclarlos daba un pendiente inflado y un avance corto.
+ *
+ * Quien llama decide hasta donde llega la cadena: pasando solo las jornadas
+ * hasta la fecha "hasta" del filtro se obtiene el estado al cierre del periodo.
+ */
+export function estadoDeObras(cadenas: JornadaEncadenada[]): EstadoObras {
+  const area = new Map<number, number>()
+  const hecho = new Map<number, number>()
+
+  for (const r of cadenas) {
+    const clave = claveDeObra(r)
+    if (!area.has(clave)) area.set(clave, areaDeObra(r))
+    hecho.set(clave, (hecho.get(clave) ?? 0) + num(r.m2Ejecutados))
+  }
+
+  let m2Totales = 0
+  let m2Acumulados = 0
+  let obrasTerminadas = 0
+
+  for (const [clave, suArea] of area) {
+    const suHecho = hecho.get(clave) ?? 0
+    m2Totales += suArea
+    m2Acumulados += suHecho
+    // Media centesima de tolerancia, como en indicadoresObra.
+    if (suArea > 0 && suHecho >= suArea - 0.005) obrasTerminadas++
+  }
+
+  return {
+    obras: area.size,
+    m2Totales,
+    m2Acumulados,
+    m2Pendientes: Math.max(0, m2Totales - m2Acumulados),
+    avance: dividir(m2Acumulados, m2Totales),
+    obrasTerminadas,
+  }
+}
+
+export interface IndicadoresAgregados extends EstadoObras {
+  registros: number
+  /** Lo producido en las jornadas filtradas. */
+  m2Ejecutados: number
   m2Meta: number
+  /** Jornadas sin meta: quedan fuera del cumplimiento, pero no de lo demas. */
+  jornadasSinMeta: number
   horasEfectivas: number
   minutosReceso: number
   rendimiento: number | null
   cumplimiento: number | null
-  avance: number | null
 }
 
 /**
- * Agrega un conjunto de jornadas. Los numeradores se suman jornada a jornada,
- * pero el area se suma UNA vez por obra: si el mismo muro se trabajo cinco
- * dias, su area no puede contar cinco veces.
+ * Agrega un conjunto de jornadas.
+ *
+ * `registros` son las jornadas del periodo: de ahi salen produccion, horas,
+ * rendimiento y cumplimiento. `cadenas` son las jornadas completas de esas
+ * mismas obras, y de ahi sale el estado (area, acumulado, pendiente, avance).
+ * Si no se pasan cadenas se usan los propios registros, que es lo correcto
+ * cuando no hay filtro de fechas de por medio.
+ *
+ * El cumplimiento solo mira las jornadas que tienen meta: sumar la produccion
+ * de un dia sin meta contra la meta de otro dia da un cumplimiento inventado.
  */
-export function agregarIndicadores(registros: JornadaEncadenada[]): IndicadoresAgregados {
-  const areaPorObra = new Map<number, number>()
-
+export function agregarIndicadores(
+  registros: JornadaEncadenada[],
+  cadenas?: JornadaEncadenada[],
+): IndicadoresAgregados {
   let m2Ejecutados = 0
+  let m2ConMeta = 0
   let m2Meta = 0
+  let jornadasSinMeta = 0
   let horasEfectivas = 0
   let minutosReceso = 0
 
   for (const r of registros) {
     const i = indicadoresJornada(r)
     m2Ejecutados += i.m2Ejecutados
-    m2Meta += i.m2Meta
     horasEfectivas += i.horasEfectivas
     minutosReceso += i.minutosReceso
 
-    const clave = claveDeObra(r)
-    if (!areaPorObra.has(clave)) areaPorObra.set(clave, areaDeObra(r))
+    if (i.m2Meta > 0) {
+      m2ConMeta += i.m2Ejecutados
+      m2Meta += i.m2Meta
+    } else {
+      jornadasSinMeta++
+    }
   }
 
-  const m2Totales = Array.from(areaPorObra.values()).reduce((a, b) => a + b, 0)
-
   return {
+    ...estadoDeObras(cadenas ?? registros),
     registros: registros.length,
-    obras: areaPorObra.size,
-    m2Totales,
     m2Ejecutados,
-    m2Pendientes: Math.max(0, m2Totales - m2Ejecutados),
     m2Meta,
+    jornadasSinMeta,
     horasEfectivas,
     minutosReceso,
     rendimiento: dividir(m2Ejecutados, horasEfectivas),
-    cumplimiento: dividir(m2Ejecutados, m2Meta),
-    avance: dividir(m2Ejecutados, m2Totales),
+    cumplimiento: dividir(m2ConMeta, m2Meta),
   }
 }
 
@@ -268,8 +330,10 @@ export function agruparIndicadores<T extends JornadaEncadenada>(
   registros: T[],
   clave: (registro: T) => string,
   etiqueta?: (registro: T) => string,
+  cadenas?: JornadaEncadenada[],
 ): Array<{ clave: string; etiqueta: string } & IndicadoresAgregados> {
   const grupos = new Map<string, { etiqueta: string; items: T[] }>()
+  const grupoDeObra = new Map<number, string>()
 
   for (const registro of registros) {
     const k = clave(registro)
@@ -277,11 +341,27 @@ export function agruparIndicadores<T extends JornadaEncadenada>(
       grupos.set(k, { etiqueta: etiqueta ? etiqueta(registro) : k, items: [] })
     }
     grupos.get(k)!.items.push(registro)
+    // Para repartir las cadenas: una obra pertenece siempre al mismo grupo,
+    // porque su ubicacion y su actividad no cambian a mitad de la cadena.
+    grupoDeObra.set(claveDeObra(registro), k)
+  }
+
+  // Las jornadas de fuera del periodo se llevan al grupo de su obra, para que
+  // el area y el acumulado de cada corte sean los de la obra completa.
+  const cadenasPorGrupo = new Map<string, JornadaEncadenada[]>()
+  if (cadenas) {
+    for (const r of cadenas) {
+      const k = grupoDeObra.get(claveDeObra(r))
+      if (!k) continue
+      const lista = cadenasPorGrupo.get(k) ?? []
+      lista.push(r)
+      cadenasPorGrupo.set(k, lista)
+    }
   }
 
   return Array.from(grupos.entries()).map(([k, grupo]) => ({
     clave: k,
     etiqueta: grupo.etiqueta,
-    ...agregarIndicadores(grupo.items),
+    ...agregarIndicadores(grupo.items, cadenas ? (cadenasPorGrupo.get(k) ?? []) : undefined),
   }))
 }

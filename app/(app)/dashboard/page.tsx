@@ -32,7 +32,14 @@ import { BarraFiltros, FiltroSeleccion, FiltroFecha } from '@/components/ui/filt
 import { Grafica, Globo, Leyenda, Segmentado, Totales, ejeComun } from '@/components/graficas/Grafica'
 import { paleta, GROSOR_BARRA } from '@/components/graficas/paleta'
 import { formatoDuracion } from '@/lib/calculos'
-import { formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
+import {
+  conciliar,
+  expandirFilas,
+  opcionesDisponibles,
+  type Dimension,
+} from '@/lib/filtrosRelacionales'
+import { formatoFecha, formatoNumero, formatoPorcentaje, hoyTexto } from '@/lib/utils'
+import { crearEtiquetas } from '@/lib/etiquetas'
 import type { Catalogos } from '@/types/dominio'
 
 type Panel = {
@@ -40,14 +47,19 @@ type Panel = {
     registros: number
     obras: number
     m2Totales: number
+    /** Producido dentro del rango de fechas filtrado. */
     m2Ejecutados: number
+    /** Producido en las cadenas completas, hasta la fecha "hasta". */
+    m2Acumulados: number
     m2Pendientes: number
     m2Meta: number
+    jornadasSinMeta: number
     horasEfectivas: number
     minutosReceso: number
     rendimiento: number | null
     cumplimiento: number | null
     avance: number | null
+    obrasTerminadas: number
   }
   obrasTerminadas: number
   nivelUbicacion: 'torre' | 'piso' | 'zona' | 'frente'
@@ -77,6 +89,7 @@ type Panel = {
     etiqueta: string
     m2Totales: number
     m2Ejecutados: number
+    m2Acumulados: number
     m2Pendientes: number
     avance: number | null
     obras: number
@@ -204,45 +217,141 @@ export default function DashboardPage() {
 
   const { dato, cargando } = useRecursoUnico<Panel>(consulta)
 
-  // Un solo viaje para todos los desplegables. La jerarquia llega completa, asi
-  // que elegir torre, piso o zona encadena los filtros sin pedir nada mas.
-  const { dato: catalogos } = useRecursoUnico<Catalogos>('/api/catalogos')
+  // Un solo viaje para todos los desplegables. La jerarquia llega completa, y
+  // con ella las combinaciones que existen de verdad en los registros: con eso
+  // cada filtro sabe, sin volver al servidor, que opciones siguen teniendo
+  // trabajo detras despues de elegir los demas.
+  const { dato: catalogos } = useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
 
-  const proyectos = catalogos?.proyectos ?? []
-  const actividades = catalogos?.actividades ?? []
-  const trabajadores = catalogos?.trabajadores ?? []
-  const cargos = catalogos?.cargos ?? []
+  // --- Filtros relacionales ------------------------------------------------
+  // Cada fila es una combinacion real de ubicacion, actividad, cuadrilla y
+  // trabajador. Sin ellas (cargando, o sin registros) no se descarta nada.
+  const filas = useMemo(
+    () =>
+      catalogos?.combinaciones ? expandirFilas(catalogos, catalogos.combinaciones) : [],
+    [catalogos],
+  )
 
+  // Para cada filtro, lo que sigue disponible dadas las elecciones de los demas.
+  const disponibles = useMemo(() => opcionesDisponibles(filas, filtros), [filas, filtros])
+  const habilitada = (dimension: Dimension, id: number) =>
+    filas.length === 0 || disponibles[dimension].has(id)
+  // Filtra una lista a lo que sigue teniendo registros: la opcion desaparece
+  // de la lista en vez de quedar en gris. Mientras los catalogos no traigan
+  // combinaciones (cargando) no se descarta nada.
+  const soloDisponibles = <T extends { id: number }>(dimension: Dimension, lista: T[]) =>
+    filas.length === 0 ? lista : lista.filter((x) => habilitada(dimension, x.id))
+
+  const proyectos = soloDisponibles('proyectoId', catalogos?.proyectos ?? [])
+  const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? [])
+  const trabajadores = soloDisponibles('trabajadorId', catalogos?.trabajadores ?? [])
+  const cargos = soloDisponibles('cargoId', catalogos?.cargos ?? [])
+
+  const torrePorId = useMemo(
+    () => new Map((catalogos?.torres ?? []).map((t) => [t.id, t])),
+    [catalogos],
+  )
+  const pisoPorId = useMemo(
+    () => new Map((catalogos?.pisos ?? []).map((p) => [p.id, p])),
+    [catalogos],
+  )
+
+  // Las opciones se escriben en un solo sitio (lib/etiquetas), para que el
+  // panel, la pantalla de ejecucion y los formularios digan lo mismo.
+  const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
+  const nombrePiso = etiquetas.nombrePiso
+
+  // La ubicacion se acota por lo que ya se eligio arriba (una torre solo ofrece
+  // sus pisos), y sobre eso cada opcion se deshabilita si no tiene registros.
   const torres = useMemo(
     () =>
-      (catalogos?.torres ?? []).filter(
-        (t) => !filtros.proyectoId || t.proyectoId === Number(filtros.proyectoId),
+      soloDisponibles(
+        'torreId',
+        (catalogos?.torres ?? []).filter(
+          (t) => !filtros.proyectoId || t.proyectoId === Number(filtros.proyectoId),
+        ),
       ),
-    [catalogos, filtros.proyectoId],
+    // `disponibles` entra en las dependencias porque soloDisponibles lo usa:
+    // sin el, elegir una actividad o una cuadrilla no reducia esta lista hasta
+    // que cambiara otra cosa.
+    [catalogos, filtros.proyectoId, filas, disponibles],
   )
 
+  const pisosBase = useMemo(
+    () =>
+      (catalogos?.pisos ?? [])
+        .filter((p) => {
+          if (filtros.torreId) return p.torreId === Number(filtros.torreId)
+          if (!filtros.proyectoId) return true
+          return torrePorId.get(p.torreId)?.proyectoId === Number(filtros.proyectoId)
+        })
+        .sort(
+          (a, b) =>
+            (torrePorId.get(a.torreId)?.nombre ?? '').localeCompare(
+              torrePorId.get(b.torreId)?.nombre ?? '',
+              'es',
+              { numeric: true },
+            ) || a.numero - b.numero,
+        ),
+    [catalogos, filtros.torreId, filtros.proyectoId, torrePorId, filas],
+  )
+
+  const zonasBase = useMemo(
+    () =>
+      (catalogos?.zonas ?? [])
+        .filter((z) => {
+          const piso = pisoPorId.get(z.pisoId)
+          if (!piso) return false
+          if (filtros.pisoId) return piso.id === Number(filtros.pisoId)
+          if (filtros.torreId) return piso.torreId === Number(filtros.torreId)
+          if (!filtros.proyectoId) return true
+          return torrePorId.get(piso.torreId)?.proyectoId === Number(filtros.proyectoId)
+        })
+        .sort((a, b) => {
+          const pa = pisoPorId.get(a.pisoId)
+          const pb = pisoPorId.get(b.pisoId)
+          return (
+            (torrePorId.get(pa?.torreId ?? 0)?.nombre ?? '').localeCompare(
+              torrePorId.get(pb?.torreId ?? 0)?.nombre ?? '',
+              'es',
+              { numeric: true },
+            ) ||
+            (pa?.numero ?? 0) - (pb?.numero ?? 0) ||
+            a.codigo.localeCompare(b.codigo, 'es', { numeric: true })
+          )
+        }),
+    [catalogos, filtros.pisoId, filtros.torreId, filtros.proyectoId, pisoPorId, torrePorId],
+  )
   const pisos = useMemo(
-    () =>
-      filtros.torreId
-        ? (catalogos?.pisos ?? []).filter((p) => p.torreId === Number(filtros.torreId))
-        : [],
-    [catalogos, filtros.torreId],
+    () => soloDisponibles('pisoId', pisosBase),
+    [pisosBase, filas, disponibles],
+  )
+  const zonas = useMemo(
+    () => soloDisponibles('zonaId', zonasBase),
+    [zonasBase, filas, disponibles],
   )
 
-  const zonas = useMemo(
-    () =>
-      filtros.pisoId
-        ? (catalogos?.zonas ?? []).filter((z) => z.pisoId === Number(filtros.pisoId))
-        : [],
-    [catalogos, filtros.pisoId],
-  )
+  // "Apto 305" existe en varias torres. Mientras el filtro de arriba no lo
+  // aclare, la etiqueta lleva la torre y el piso para que no se confundan, y
+  // siempre termina con el codigo del proyecto detras de un guion.
+  const etiquetaPiso = (p: Catalogos['pisos'][number]) =>
+    etiquetas.piso(p, { conTorre: !filtros.torreId })
+
+  const etiquetaZona = (z: Catalogos['zonas'][number]) =>
+    etiquetas.zona(z, {
+      conTorre: !filtros.torreId && !filtros.pisoId,
+      conPiso: !filtros.pisoId,
+    })
 
   const cuadrillas = useMemo(
     () =>
-      (catalogos?.cuadrillas ?? []).filter(
-        (c) => !filtros.proyectoId || c.proyectoId === Number(filtros.proyectoId),
+      soloDisponibles(
+        'cuadrillaId',
+        (catalogos?.cuadrillas ?? []).filter(
+          (c) => !filtros.proyectoId || c.proyectoId === Number(filtros.proyectoId),
+        ),
       ),
-    [catalogos, filtros.proyectoId],
+    [catalogos, filtros.proyectoId, filas, disponibles],
   )
 
   // La primera vez el rango se pone solo: de la obra mas antigua hasta hoy,
@@ -252,13 +361,17 @@ export default function DashboardPage() {
     setFiltros((f) => ({
       ...f,
       desde: dato.rangoDisponible.desde!,
-      hasta: new Date().toISOString().slice(0, 10),
+      hasta: hoyTexto(),
     }))
     setRangoPuesto(true)
   }, [dato, rangoPuesto])
 
+  // Todo cambio de filtro pasa por aqui. Lo que se acaba de elegir manda: si
+  // choca con algo elegido antes (otra torre, un trabajador que nunca estuvo
+  // ahi), se suelta lo anterior, y asi nunca queda una combinacion sin datos
+  // que el residente no haya pedido.
   const cambiar = (campos: Partial<typeof filtrosVacios>) =>
-    setFiltros((f) => ({ ...f, ...campos }))
+    setFiltros((f) => conciliar(filas, { ...f, ...campos }, Object.keys(campos)))
 
   const filtrosActivos = Object.values(filtros).filter(Boolean).length
   const i = dato?.indicadores
@@ -318,9 +431,7 @@ export default function DashboardPage() {
         <FiltroSeleccion
           etiqueta="Proyecto"
           value={filtros.proyectoId}
-          onChange={(v) =>
-            cambiar({ proyectoId: v, torreId: '', pisoId: '', zonaId: '', cuadrillaId: '' })
-          }
+          onChange={(v) => cambiar({ proyectoId: v })}
         >
           <option value="">Todos</option>
           {proyectos.map((p) => (
@@ -333,13 +444,12 @@ export default function DashboardPage() {
         <FiltroSeleccion
           etiqueta="Torre"
           value={filtros.torreId}
-          disabled={!filtros.proyectoId}
-          onChange={(v) => cambiar({ torreId: v, pisoId: '', zonaId: '' })}
+          onChange={(v) => cambiar({ torreId: v })}
         >
           <option value="">Todas</option>
           {torres.map((t) => (
             <option key={t.id} value={t.id}>
-              {t.nombre}
+              {etiquetas.torre(t)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -347,13 +457,12 @@ export default function DashboardPage() {
         <FiltroSeleccion
           etiqueta="Piso"
           value={filtros.pisoId}
-          disabled={!filtros.torreId}
-          onChange={(v) => cambiar({ pisoId: v, zonaId: '' })}
+          onChange={(v) => cambiar({ pisoId: v })}
         >
           <option value="">Todos</option>
           {pisos.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.nombre || `Piso ${p.numero}`}
+              {etiquetaPiso(p)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -361,13 +470,12 @@ export default function DashboardPage() {
         <FiltroSeleccion
           etiqueta="Zona"
           value={filtros.zonaId}
-          disabled={!filtros.pisoId}
           onChange={(v) => cambiar({ zonaId: v })}
         >
           <option value="">Todas</option>
           {zonas.map((z) => (
             <option key={z.id} value={z.id}>
-              {z.nombre}
+              {etiquetaZona(z)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -393,7 +501,7 @@ export default function DashboardPage() {
           <option value="">Todas</option>
           {cuadrillas.map((c) => (
             <option key={c.id} value={c.id}>
-              {c.nombre}
+              {etiquetas.cuadrilla(c)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -469,7 +577,7 @@ export default function DashboardPage() {
             />
             <Indicador
               etiqueta="Avance real"
-              sobretitulo={`sobre ${formatoNumero(i.m2Totales)} m2 de obra`}
+              sobretitulo={`acumulado sobre ${formatoNumero(i.m2Totales)} m2 de obra`}
               valor={formatoPorcentaje(i.avance)}
               icono={Percent}
               progreso={i.avance ?? 0}
@@ -485,7 +593,13 @@ export default function DashboardPage() {
               progreso={i.cumplimiento ?? 0}
               chip={(i.cumplimiento ?? 0) >= 1 ? 'En meta' : 'Bajo meta'}
               tonoChip={(i.cumplimiento ?? 0) >= 1 ? 'bueno' : 'aviso'}
-              detalle={`meta ${formatoNumero(i.m2Meta)} m2`}
+              detalle={
+                i.jornadasSinMeta > 0
+                  ? `meta ${formatoNumero(i.m2Meta)} m2, ${i.jornadasSinMeta} jornada${
+                      i.jornadasSinMeta === 1 ? '' : 's'
+                    } sin meta fuera del calculo`
+                  : `meta ${formatoNumero(i.m2Meta)} m2`
+              }
             />
             <Indicador
               etiqueta="Rendimiento"
@@ -851,13 +965,21 @@ export default function DashboardPage() {
             {/* 5. Avance por ubicacion */}
             <Grafica
               titulo={`Avance por ${NOMBRE_NIVEL[dato.nivelUbicacion]}`}
-              descripcion="Lo ejecutado sobre el area total. Pulsa una fila para bajar un nivel."
-              nota="El area de cada obra cuenta una sola vez aunque se haya trabajado varios dias."
+              descripcion="Lo acumulado sobre el area total. Pulsa una fila para bajar un nivel."
+              nota="El area de cada obra cuenta una sola vez, y el acumulado incluye las jornadas anteriores al rango de fechas."
               vacio={datosUbicacion.length === 0}
-              columnas={['Ubicacion', 'Ejecutado m2', 'Total m2', 'Pendiente m2', 'Avance']}
+              columnas={[
+                'Ubicacion',
+                'Periodo m2',
+                'Acumulado m2',
+                'Total m2',
+                'Pendiente m2',
+                'Avance',
+              ]}
               filas={datosUbicacion.map((u) => [
                 u.etiqueta,
                 formatoNumero(u.m2Ejecutados),
+                formatoNumero(u.m2Acumulados),
                 formatoNumero(u.m2Totales),
                 formatoNumero(u.m2Pendientes),
                 formatoPorcentaje(u.avance),
@@ -887,7 +1009,7 @@ export default function DashboardPage() {
                               {u.etiqueta}
                             </span>
                             <span className="block text-xs tabular-nums text-obra-500">
-                              {formatoNumero(u.m2Ejecutados)} de {formatoNumero(u.m2Totales)} m2
+                              {formatoNumero(u.m2Acumulados)} de {formatoNumero(u.m2Totales)} m2
                               {u.m2Pendientes > 0 &&
                                 `, faltan ${formatoNumero(u.m2Pendientes)}`}
                             </span>

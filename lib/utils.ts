@@ -40,7 +40,25 @@ export function formatoFecha(valor: Date | string | null | undefined) {
   return `${dia}/${mes}/${fecha.getUTCFullYear()}`
 }
 
-/** Convierte una fecha al formato aaaa-mm-dd que usan los inputs date. */
+/**
+ * La fecha de hoy, aaaa-mm-dd, en la zona horaria del equipo.
+ *
+ * No vale `new Date().toISOString()`: eso da la fecha UTC, y en Colombia
+ * (UTC-5) a partir de las 7 de la tarde propone el dia siguiente. El residente
+ * que cierra el registro por la noche acababa guardando la jornada con la
+ * fecha de manana.
+ */
+export function hoyTexto() {
+  const ahora = new Date()
+  const dosDigitos = (n: number) => String(n).padStart(2, '0')
+  return `${ahora.getFullYear()}-${dosDigitos(ahora.getMonth() + 1)}-${dosDigitos(ahora.getDate())}`
+}
+
+/**
+ * Convierte una fecha al formato aaaa-mm-dd que usan los inputs date.
+ * Se lee en UTC a proposito: las fechas de la base se guardan como medianoche
+ * UTC, asi que leerlas en local las correria un dia hacia atras.
+ */
 export function fechaParaInput(valor: Date | string | null | undefined) {
   if (!valor) return ''
   const fecha = typeof valor === 'string' ? new Date(valor) : valor

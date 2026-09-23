@@ -16,6 +16,16 @@ export async function GET(request: Request) {
           take: 1,
           include: { cuadrilla: { select: { id: true, nombre: true } } },
         },
+        // Sus precios por metro: es lo que se edita en su propia ficha.
+        tarifas: {
+          orderBy: { actividad: { nombre: 'asc' } },
+          select: {
+            id: true,
+            actividadId: true,
+            valorM2: true,
+            actividad: { select: { id: true, nombre: true, unidadMedida: true } },
+          },
+        },
       },
     })
     return ok(trabajadores)
@@ -27,8 +37,17 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     await exigirPermiso('gestionar')
-    const datos = esquemaTrabajador.parse(await request.json())
-    const creado = await prisma.trabajador.create({ data: datos })
+    const { tarifas, ...datos } = esquemaTrabajador.parse(await request.json())
+
+    // Las tarifas se crean con el trabajador, en la misma operacion: si una de
+    // ellas falla, no queda una ficha a medias.
+    const creado = await prisma.trabajador.create({
+      data: { ...datos, tarifas: { create: tarifas } },
+      include: {
+        cargo: { select: { id: true, nombre: true } },
+        tarifas: { select: { id: true, actividadId: true, valorM2: true } },
+      },
+    })
     return ok(creado, 201)
   } catch (error) {
     return manejarError(error)

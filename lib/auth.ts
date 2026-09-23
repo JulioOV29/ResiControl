@@ -2,8 +2,17 @@ import type { NextAuthOptions } from 'next-auth'
 import { getServerSession } from 'next-auth'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import bcrypt from 'bcryptjs'
-import type { RolUsuario } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
+
+/**
+ * Cuantos intentos fallidos seguidos se admiten y cuanto dura el bloqueo.
+ *
+ * El contador vive en la base (columnas intentos_fallidos y bloqueado_hasta):
+ * en Vercel cada peticion puede caer en una instancia distinta, asi que un
+ * contador en memoria no frenaria a nadie.
+ */
+const INTENTOS_MAXIMOS = 5
+const BLOQUEO_MINUTOS = 15
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt', maxAge: 60 * 60 * 12 },
@@ -28,8 +37,60 @@ export const authOptions: NextAuthOptions = {
         // contrasena incorrecta para no revelar que correos existen.
         if (!usuario || !usuario.activo) return null
 
+        /**
+         * Cuenta bloqueada: se avisa con todas las letras y ni se comprueba la
+         * contrasena, para que el bloqueo sirva de algo.
+         *
+         * El aviso dice que ESE correo esta bloqueado, asi que le confirma a
+         * quien pregunte que la cuenta existe. Se acepta a conciencia: es un
+         * sistema interno de obra, y un residente que no entiende por que no
+         * entra con su clave buena cuesta mas que ese dato.
+         */
+        if (usuario.bloqueadoHasta && usuario.bloqueadoHasta > new Date()) {
+          const minutos = Math.max(
+            1,
+            Math.ceil((usuario.bloqueadoHasta.getTime() - Date.now()) / 60_000),
+          )
+          throw new Error(
+            `Usuario bloqueado por ${INTENTOS_MAXIMOS} intentos fallidos. Vuelve a intentarlo en ${minutos} minuto${minutos === 1 ? '' : 's'}.`,
+          )
+        }
+
         const valida = await bcrypt.compare(credentials.password, usuario.passwordHash)
-        if (!valida) return null
+
+        if (!valida) {
+          const fallidos = usuario.intentosFallidos + 1
+          const bloquear = fallidos >= INTENTOS_MAXIMOS
+          await prisma.usuario.update({
+            where: { id: usuario.id },
+            data: {
+              // Al bloquear, el contador vuelve a cero: lo que cuenta a partir
+              // de ahi es la fecha de desbloqueo.
+              intentosFallidos: bloquear ? 0 : fallidos,
+              bloqueadoHasta: bloquear
+                ? new Date(Date.now() + BLOQUEO_MINUTOS * 60_000)
+                : null,
+            },
+          })
+
+          // El intento que agota los reintentos ya avisa del bloqueo, en vez de
+          // dejar que el usuario descubra en el siguiente que algo cambio.
+          if (bloquear) {
+            throw new Error(
+              `Usuario bloqueado por ${INTENTOS_MAXIMOS} intentos fallidos. Vuelve a intentarlo en ${BLOQUEO_MINUTOS} minutos.`,
+            )
+          }
+
+          return null
+        }
+
+        // Entro bien: se limpia el contador.
+        if (usuario.intentosFallidos > 0 || usuario.bloqueadoHasta) {
+          await prisma.usuario.update({
+            where: { id: usuario.id },
+            data: { intentosFallidos: 0, bloqueadoHasta: null },
+          })
+        }
 
         return {
           id: String(usuario.id),
@@ -68,19 +129,10 @@ export function sesionActual() {
   return getServerSession(authOptions)
 }
 
-/** Permisos por rol, en un solo lugar para no repetir condiciones sueltas. */
-export const permisos = {
-  /** Crear, editar o borrar catalogos, obra, personal y metas. */
-  gestionar: ['ADMIN', 'RESIDENTE'] as RolUsuario[],
-  /** Crear o editar registros de ejecucion. */
-  registrar: ['ADMIN', 'RESIDENTE'] as RolUsuario[],
-  /** Administrar usuarios del sistema. */
-  administrar: ['ADMIN'] as RolUsuario[],
-  /** Consultar dashboard e informes. */
-  consultar: ['ADMIN', 'RESIDENTE', 'SUPERVISOR'] as RolUsuario[],
-}
-
-export function puede(rol: RolUsuario | undefined, accion: keyof typeof permisos) {
-  if (!rol) return false
-  return permisos[accion].includes(rol)
-}
+/**
+ * La tabla de permisos vive en lib/dominio.ts, que no depende de nada del
+ * servidor, para que el cliente pueda leer la misma sin arrastrar Prisma. Aqui
+ * solo se reexporta, que es donde el codigo del servidor la busca.
+ */
+export { PERMISOS as permisos, puede } from '@/lib/dominio'
+export type { Accion } from '@/lib/dominio'

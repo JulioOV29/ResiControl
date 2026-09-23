@@ -1,10 +1,9 @@
 import { prisma } from '@/lib/prisma'
 import { ok, manejarError, exigirSesion } from '@/lib/api'
-import { camposPanel, filtroRegistros } from '@/lib/consultas'
+import { camposIndicadores, camposPanel, filtroRegistros } from '@/lib/consultas'
 import {
   agregarIndicadores,
   agruparIndicadores,
-  areaDeObra,
   claveDeObra,
   indicadoresJornada,
 } from '@/lib/calculos'
@@ -41,7 +40,33 @@ export async function GET(request: Request) {
       }),
     ])
 
-    const indicadores = agregarIndicadores(registros)
+    /**
+     * Las cadenas completas de las obras que aparecen en el periodo.
+     *
+     * Hace falta una segunda consulta porque el avance y el pendiente de un
+     * muro no dependen del rango de fechas: se calculan sobre todo lo que se
+     * hizo en el, tambien antes del "desde". Se corta en el "hasta" para que
+     * el numero sea el estado al cierre del periodo y no el de hoy.
+     *
+     * Es barata: filtra por id y por id_registro_origen, los dos indexados, y
+     * trae solo las columnas de los calculos.
+     */
+    const clavesDeObra = [...new Set(registros.map(claveDeObra))]
+    const hasta = parametros.get('hasta')
+    const cadenas = clavesDeObra.length
+      ? await prisma.registroEjecucion.findMany({
+          where: {
+            OR: [
+              { id: { in: clavesDeObra } },
+              { registroOrigenId: { in: clavesDeObra } },
+            ],
+            ...(hasta ? { fechaEjecucion: { lte: new Date(`${hasta}T00:00:00.000Z`) } } : {}),
+          },
+          select: camposIndicadores,
+        })
+      : []
+
+    const indicadores = agregarIndicadores(registros, cadenas)
 
     const soloFecha = (f: Date | null) => (f ? f.toISOString().slice(0, 10) : null)
 
@@ -129,12 +154,18 @@ export async function GET(request: Request) {
       return z.piso.torre.nombre
     }
 
-    const porUbicacion = agruparIndicadores(registros, claveUbicacion, etiquetaUbicacion)
+    const porUbicacion = agruparIndicadores(
+      registros,
+      claveUbicacion,
+      etiquetaUbicacion,
+      cadenas,
+    )
       .map((u) => ({
         clave: u.clave,
         etiqueta: u.etiqueta,
         m2Totales: u.m2Totales,
         m2Ejecutados: u.m2Ejecutados,
+        m2Acumulados: u.m2Acumulados,
         m2Pendientes: u.m2Pendientes,
         avance: u.avance,
         obras: u.obras,
@@ -158,21 +189,11 @@ export async function GET(request: Request) {
       }))
       .sort((a, b) => (b.rendimiento ?? 0) - (a.rendimiento ?? 0))
 
-    // --- Obras terminadas ----------------------------------------------------
-    const acumuladoPorObra = new Map<number, { area: number; hecho: number }>()
-    for (const r of registros) {
-      const clave = claveDeObra(r)
-      const actual = acumuladoPorObra.get(clave) ?? { area: areaDeObra(r), hecho: 0 }
-      actual.hecho += indicadoresJornada(r).m2Ejecutados
-      acumuladoPorObra.set(clave, actual)
-    }
-    const obrasTerminadas = Array.from(acumuladoPorObra.values()).filter(
-      (o) => o.area > 0 && o.hecho >= o.area - 0.005,
-    ).length
-
     return ok({
       indicadores,
-      obrasTerminadas,
+      // Sale de las cadenas completas: una obra terminada esta semana cuenta
+      // aunque empezara el mes pasado.
+      obrasTerminadas: indicadores.obrasTerminadas,
       nivelUbicacion: nivel,
       porActividad,
       porDia,

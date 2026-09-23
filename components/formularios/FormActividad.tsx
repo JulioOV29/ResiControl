@@ -22,11 +22,8 @@ export function FormActividad({
     nombre: '',
     unidadMedida: 'm2',
     descripcion: '',
-    valorM2: '',
     activo: true,
   })
-
-  const tarifaOriginal = registro?.valorM2 == null ? '' : String(registro.valorM2)
 
   useEffect(() => {
     if (!abierto) return
@@ -36,15 +33,11 @@ export function FormActividad({
             nombre: registro.nombre,
             unidadMedida: registro.unidadMedida,
             descripcion: registro.descripcion || '',
-            valorM2: registro.valorM2 == null ? '' : String(registro.valorM2),
             activo: registro.activo,
           }
-        : { nombre: '', unidadMedida: 'm2', descripcion: '', valorM2: '', activo: true },
+        : { nombre: '', unidadMedida: 'm2', descripcion: '', activo: true },
     )
   }, [abierto, registro])
-
-  /** Cambiar la tarifa solo afecta lo que se registre de aqui en adelante. */
-  const cambiaTarifa = Boolean(registro) && form.valorM2 !== tarifaOriginal
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
@@ -91,37 +84,14 @@ export function FormActividad({
           />
         </Campo>
 
-        <Campo
-          etiqueta={`Valor por ${form.unidadMedida || 'unidad'} ejecutado`}
-          error={errores.valorM2}
-        >
-          <div className="relative">
-            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-obra-400">
-              $
-            </span>
-            <Entrada
-              type="number"
-              step="1"
-              min="0"
-              className="pl-7"
-              value={form.valorM2}
-              onChange={(e) => setForm({ ...form, valorM2: e.target.value })}
-              placeholder="0"
-            />
-          </div>
-          <p className="mt-1.5 text-xs text-obra-500">
-            Lo que se paga por cada {form.unidadMedida || 'unidad'} ejecutado de esta actividad.
-            Puede quedar vacio si todavia no se ha acordado.
-          </p>
-        </Campo>
-
-        {cambiaTarifa && (
-          <div className="rounded-lg border border-marca-200 bg-marca-50 px-3 py-2 text-xs text-marca-700">
-            La tarifa nueva aplica a lo que se registre de aqui en adelante. Las jornadas ya
-            guardadas conservan la tarifa que tenian, para que cambiar el precio hoy no
-            reliquide lo que ya se pago.
-          </div>
-        )}
+        {/*
+          El precio ya no vive aqui: lo que se paga por metro depende de quien
+          ejecuta, asi que se captura en la ficha de cada trabajador.
+        */}
+        <p className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2 text-xs text-obra-500">
+          El precio por {form.unidadMedida || 'unidad'} se acuerda con cada trabajador y se
+          captura en su ficha, en la seccion Trabajadores.
+        </p>
 
         <label className="flex items-center gap-2 text-sm text-obra-700">
           <input

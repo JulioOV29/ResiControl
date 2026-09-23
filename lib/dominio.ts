@@ -47,3 +47,32 @@ export const opcionesEstadoEjecucion = ESTADOS_EJECUCION.map((v) => ({
 }))
 
 export const opcionesRol = ROLES.map((v) => ({ valor: v, texto: ETIQUETA_ROL[v] }))
+
+// ---------------------------------------------------------------------------
+//  Permisos por rol
+//
+//  Viven aqui, junto a los demas datos del dominio, para que el servidor y el
+//  navegador miren la misma tabla. En lib/auth.ts no pueden estar: ese modulo
+//  arrastra Prisma y bcrypt, que no tienen nada que hacer en el cliente.
+//
+//  Ojo con lo que significa cada lado: en el navegador esto decide que botones
+//  se ven, nada mas. La autorizacion de verdad la aplica cada API Route.
+// ---------------------------------------------------------------------------
+
+export const PERMISOS = {
+  /** Crear, editar o borrar catalogos, obra, personal y metas. */
+  gestionar: ['ADMIN', 'RESIDENTE'],
+  /** Crear o editar registros de ejecucion. */
+  registrar: ['ADMIN', 'RESIDENTE'],
+  /** Administrar usuarios del sistema. */
+  administrar: ['ADMIN'],
+  /** Consultar dashboard e informes. */
+  consultar: ['ADMIN', 'RESIDENTE', 'SUPERVISOR'],
+} as const satisfies Record<string, readonly Rol[]>
+
+export type Accion = keyof typeof PERMISOS
+
+export function puede(rol: Rol | undefined | null, accion: Accion) {
+  if (!rol) return false
+  return (PERMISOS[accion] as readonly Rol[]).includes(rol)
+}

@@ -5,7 +5,7 @@ import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion } from '@/components/ui/input'
 import { AvisoError, PieFormulario, useEnvio } from './base'
 import { useRecurso } from '@/lib/cliente'
-import { fechaParaInput } from '@/lib/utils'
+import { fechaParaInput, hoyTexto } from '@/lib/utils'
 import type { Actividad, Cargo, Meta, Proyecto } from '@/types/dominio'
 
 export function FormMeta({
@@ -30,7 +30,7 @@ export function FormMeta({
     cargoId: '',
     rendimientoObjetivo: '',
     m2Objetivo: '',
-    vigenciaDesde: new Date().toISOString().slice(0, 10),
+    vigenciaDesde: hoyTexto(),
     vigenciaHasta: '',
   }
   const [form, setForm] = useState(inicial)

@@ -11,6 +11,7 @@ import { Insignia } from '@/components/ui/badge'
 import { AccionesEditarBorrar } from '@/components/ui/acciones'
 import { ConfirmarEliminacion } from '@/components/ui/modal'
 import { FormTrabajador } from '@/components/formularios/FormTrabajador'
+import { formatoMoneda } from '@/lib/utils'
 import type { Trabajador } from '@/types/dominio'
 
 export default function TrabajadoresPage() {
@@ -42,6 +43,27 @@ export default function TrabajadoresPage() {
       titulo: 'Cuadrilla actual',
       render: (t) =>
         t.asignaciones?.[0]?.cuadrilla.nombre ?? <span className="text-obra-400">Sin asignar</span>,
+    },
+    {
+      // Los precios se acuerdan con la persona, asi que se ven desde su ficha:
+      // aqui basta con saber cuantas actividades tiene acordadas y a cuanto.
+      clave: 'precios',
+      titulo: 'Precios',
+      soloEscritorio: true,
+      render: (t) => {
+        const tarifas = t.tarifas ?? []
+        if (tarifas.length === 0) return <span className="text-obra-400">Sin precios</span>
+        return (
+          <span className="text-obra-700">
+            {tarifas.length} actividad{tarifas.length === 1 ? '' : 'es'}
+            <span className="ml-1 text-xs tabular-nums text-obra-400">
+              {formatoMoneda(Math.min(...tarifas.map((x) => x.valorM2)))}
+              {tarifas.length > 1 &&
+                ` a ${formatoMoneda(Math.max(...tarifas.map((x) => x.valorM2)))}`}
+            </span>
+          </span>
+        )
+      },
     },
     {
       clave: 'estado',

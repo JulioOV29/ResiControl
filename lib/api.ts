@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
-import { Prisma, type RolUsuario } from '@prisma/client'
+import { Prisma } from '@prisma/client'
 import { ZodError } from 'zod'
-import { sesionActual, permisos } from '@/lib/auth'
+import { sesionActual } from '@/lib/auth'
+import { puede, type Accion, type Rol } from '@/lib/dominio'
 import { prisma } from '@/lib/prisma'
 
 /** Error de negocio con codigo HTTP explicito. */
@@ -76,9 +77,14 @@ export function manejarError(error: unknown) {
     }
   }
 
+  // El detalle se queda en el log del servidor. Devolverlo al navegador
+  // significaba exponer mensajes de Prisma, con nombres de tablas y columnas,
+  // a cualquiera que provocara un fallo. En desarrollo si se muestra, que es
+  // cuando hace falta para depurar.
   console.error('[api]', error)
-  const mensaje = error instanceof Error ? error.message : 'Error interno del servidor'
-  return fallo(mensaje, 500)
+  const detalle =
+    process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
+  return fallo('Error interno del servidor', 500, detalle)
 }
 
 /**
@@ -110,7 +116,7 @@ export async function exigirSesion() {
  * a alguien surta efecto de inmediato en lugar de esperar a que caduque su
  * sesion.
  */
-export async function exigirPermiso(accion: keyof typeof permisos) {
+export async function exigirPermiso(accion: Accion) {
   const sesion = await exigirSesion()
 
   const usuario = await prisma.usuario.findUnique({
@@ -124,7 +130,7 @@ export async function exigirPermiso(accion: keyof typeof permisos) {
   if (!usuario.activo) {
     throw new ErrorApi(403, 'Tu cuenta esta desactivada')
   }
-  if (!permisos[accion].includes(usuario.rol as RolUsuario)) {
+  if (!puede(usuario.rol as Rol, accion)) {
     throw new ErrorApi(403, 'Tu rol no tiene permiso para esta accion')
   }
 

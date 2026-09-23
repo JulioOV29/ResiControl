@@ -26,7 +26,14 @@ export default function LoginPage() {
     })
 
     if (resultado?.error) {
-      setError('Correo o contrasena incorrectos, o la cuenta esta desactivada.')
+      // NextAuth devuelve 'CredentialsSignin' cuando la entrada no es valida y
+      // el texto del error cuando el servidor tiene algo concreto que decir,
+      // como que la cuenta quedo bloqueada por intentos fallidos.
+      setError(
+        resultado.error === 'CredentialsSignin'
+          ? 'Correo o contrasena incorrectos, o la cuenta esta desactivada.'
+          : resultado.error,
+      )
       setCargando(false)
       return
     }
