@@ -21,7 +21,7 @@ export async function GET(request: Request) {
       where: filtroRegistros(parametros),
       orderBy: [{ fechaEjecucion: 'desc' }, { id: 'desc' }],
       include: {
-        frente: {
+        elemento: {
           select: {
             id: true,
             codigoDwg: true,

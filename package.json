@@ -4,6 +4,7 @@
   "private": true,
   "description": "Sistema de Gestion y Analisis de Informacion de Obra",
   "scripts": {
+    "predev": "node scripts/respaldo.js --suave",
     "dev": "next dev",
     "build": "prisma generate && next build",
     "start": "next start",
@@ -14,8 +15,10 @@
     "seed": "node scripts/seed.js",
     "setup": "prisma db push && node prisma/aplicar-constraints.js && node scripts/seed.js",
     "importar": "node scripts/importar-prototipo.js",
-    "db:reset": "prisma db push --force-reset --accept-data-loss",
-    "rehacer": "prisma db push --force-reset --accept-data-loss && node prisma/aplicar-constraints.js && node scripts/seed.js && node scripts/importar-prototipo.js",
+    "respaldo": "node scripts/respaldo.js",
+    "restaurar": "node scripts/restaurar.js",
+    "db:reset": "node scripts/guardia-reset.js && prisma db push --force-reset --accept-data-loss",
+    "rehacer": "node scripts/guardia-reset.js && prisma db push --force-reset --accept-data-loss && node prisma/aplicar-constraints.js && node scripts/seed.js && node scripts/importar-prototipo.js",
     "refechar": "node scripts/refechar.js"
   },
   "dependencies": {

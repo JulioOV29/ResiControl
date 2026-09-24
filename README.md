@@ -127,12 +127,12 @@ proxy.ts            protección de rutas
 
 ## Modelo de datos
 
-La jerarquía física es `Proyecto > Torre > Piso > Zona > Frente de trabajo`.
+La jerarquía física es `Proyecto > Torre > Piso > Zona > Elemento constructivo`.
 El personal se organiza en `Cuadrilla` con un histórico de asignaciones en
 `cuadrilla_trabajador`, y cada `Trabajador` tiene un `Cargo`.
 
 El centro de todo es **`registros_ejecucion`**, que conecta la dimensión física
-(frente), la humana (cuadrilla y trabajador), la temporal (fecha y horas) y la
+(elemento), la humana (cuadrilla y trabajador), la temporal (fecha y horas) y la
 productiva (cantidades y meta).
 
 ### Usuario y Trabajador son entidades distintas

@@ -6,6 +6,7 @@ import {
   aHora,
   estadoDeObra,
   tarifaDeTrabajador,
+  medidasDelElemento,
   validarCoherencia,
   validarFechaEnCadena,
   validarTareaParaObra,
@@ -42,7 +43,7 @@ export async function PUT(request: Request, { params }: Contexto) {
         registroOrigenId: true,
         registroAnteriorId: true,
         actividadId: true,
-        frenteId: true,
+        elementoId: true,
         trabajadorId: true,
         tareaId: true,
       },
@@ -59,18 +60,24 @@ export async function PUT(request: Request, { params }: Contexto) {
       await validarCoherencia(datos)
       await validarFechaEnCadena(actual, datos.fechaEjecucion)
       // La obra puede ganar, perder o cambiar de tarea; la tarea nueva tiene
-      // que estar libre y coincidir en frente y actividad.
+      // que estar libre y coincidir en elemento y actividad.
       if (tareaId) await validarTareaParaObra(tareaId, datos, id)
 
-      // Reducir el area por debajo de lo ya ejecutado en la cadena dejaria la
+      /**
+       * Las medidas se vuelven a leer del elemento: si la obra se mueve a otro
+       * muro, la cantidad por ejecutar es la de ese muro. Cambiarlas ya no es
+       * cosa de esta pantalla, sino de la ficha del elemento constructivo.
+       */
+      const medidas = await medidasDelElemento(datos.elementoId)
+
+      // Que el area quede por debajo de lo ya ejecutado en la cadena dejaria la
       // obra por encima del 100%.
       const obra = await estadoDeObra(raizId, id)
-      const areaNueva = datos.largo * datos.alto
       const acumuladoOtros = obra ? obra.ejecutado : 0
-      if (datos.m2Ejecutados + acumuladoOtros > areaNueva + 0.005) {
+      if (datos.m2Ejecutados + acumuladoOtros > medidas.area + 0.005) {
         throw new ErrorApi(
           409,
-          `Con esas medidas el area seria ${areaNueva.toFixed(2)} m2, y la obra ya lleva ${(datos.m2Ejecutados + acumuladoOtros).toFixed(2)} m2 sumando sus avances`,
+          `El elemento ${medidas.elemento.codigoDwg} mide ${medidas.area.toFixed(2)} m2, y la obra llevaria ${(datos.m2Ejecutados + acumuladoOtros).toFixed(2)} m2 sumando sus avances`,
         )
       }
 
@@ -81,12 +88,12 @@ export async function PUT(request: Request, { params }: Contexto) {
        * jornada.
        */
       const cambioActividad = datos.actividadId !== actual.actividadId
-      const cambioFrente = datos.frenteId !== actual.frenteId
+      const cambioElemento = datos.elementoId !== actual.elementoId
       const cambioTrabajador = datos.trabajadorId !== actual.trabajadorId
       const recalcular = cambioActividad || cambioTrabajador
 
       /**
-       * Los avances heredan frente y actividad al crearse, asi que corregirlos
+       * Los avances heredan elemento y actividad al crearse, asi que corregirlos
        * en la apertura tiene que arrastrar la cadena entera: si no, el mismo
        * muro quedaba repartido entre dos ubicaciones o dos actividades.
        *
@@ -95,7 +102,7 @@ export async function PUT(request: Request, { params }: Contexto) {
        * distintos de la misma obra los puede hacer gente distinta.
        */
       const avances =
-        cambioActividad || cambioFrente
+        cambioActividad || cambioElemento
           ? await prisma.registroEjecucion.findMany({
               where: { registroOrigenId: id },
               select: { id: true, trabajadorId: true },
@@ -118,6 +125,8 @@ export async function PUT(request: Request, { params }: Contexto) {
           where: { id },
           data: {
             ...datos,
+            largo: medidas.largo,
+            alto: medidas.alto,
             tareaId,
             ...(recalcular ? { valorM2: tarifaPropia } : {}),
             horaInicio: aHora(horaInicio),
@@ -130,7 +139,7 @@ export async function PUT(request: Request, { params }: Contexto) {
           prisma.registroEjecucion.update({
             where: { id: a.id },
             data: {
-              frenteId: datos.frenteId,
+              elementoId: datos.elementoId,
               actividadId: datos.actividadId,
               ...(cambioActividad ? { valorM2: tarifasAvances[indice] } : {}),
               usuarioActualizaId: sesion.user.id,
@@ -152,7 +161,7 @@ export async function PUT(request: Request, { params }: Contexto) {
     void registroAnteriorId
 
     await validarCoherencia({
-      frenteId: actual.frenteId,
+      elementoId: actual.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
       fechaEjecucion: datos.fechaEjecucion,

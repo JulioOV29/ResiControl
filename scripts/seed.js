@@ -27,7 +27,7 @@ if (!PASSWORD || PASSWORD.length < 8) {
 }
 
 const CARGOS = [
-  { nombre: 'Oficial', descripcion: 'Ejecuta la actividad principal del frente de trabajo' },
+  { nombre: 'Oficial', descripcion: 'Ejecuta la actividad principal del elemento constructivo' },
   { nombre: 'Ayudante', descripcion: 'Apoya al oficial en la preparación y el suministro' },
   { nombre: 'Albañil', descripcion: 'Ejecuta trabajos de mampostería y acabados' },
 ]

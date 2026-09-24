@@ -1,10 +1,16 @@
 import type { Config } from 'tailwindcss'
 
 const config: Config = {
-  content: [
-    './app/**/*.{ts,tsx}',
-    './components/**/*.{ts,tsx}',
-  ],
+  /**
+   * Solo .tsx: las clases de Tailwind viven en los componentes, no en los
+   * modulos de servidor.
+   *
+   * Incluir los .ts metia en la lista que Tailwind vigila los route.ts de la
+   * API, y al renombrar o borrar una ruta el servidor de desarrollo se quedaba
+   * pidiendo un archivo que ya no existe: "ENOENT ... api/frentes/route.ts" al
+   * compilar globals.css.
+   */
+  content: ['./app/**/*.tsx', './components/**/*.tsx'],
   theme: {
     extend: {
       colors: {

@@ -7,6 +7,7 @@ import {
   camposIndicadores,
   aHora,
   tarifaDeTrabajador,
+  medidasDelElemento,
   validarCoherencia,
   validarTareaParaObra,
   sincronizarEstadoTarea,
@@ -110,8 +111,19 @@ export async function POST(request: Request) {
 
       await validarCoherencia(datos)
       // Si la obra nace de una tarea asignada, esa tarea tiene que estar libre
-      // y hablar del mismo frente y la misma actividad.
+      // y hablar del mismo elemento y la misma actividad.
       if (tareaId) await validarTareaParaObra(tareaId, datos)
+
+      // Las medidas salen del elemento constructivo, no del navegador, y se
+      // copian a la jornada: es lo que fija el 100% de esta obra.
+      const medidas = await medidasDelElemento(datos.elementoId)
+
+      if (datos.m2Ejecutados > medidas.area + 0.005) {
+        throw new ErrorApi(
+          409,
+          `El elemento ${medidas.elemento.codigoDwg} mide ${medidas.area.toFixed(2)} m2: no se puede ejecutar mas que eso`,
+        )
+      }
 
       const [codigoRegistro, valorM2] = await Promise.all([
         siguienteCodigoDeObra(),
@@ -123,6 +135,8 @@ export async function POST(request: Request) {
       const creado = await prisma.registroEjecucion.create({
         data: {
           ...datos,
+          largo: medidas.largo,
+          alto: medidas.alto,
           tareaId,
           codigoRegistro,
           // La tarifa queda congelada en la jornada, como la meta.
@@ -149,7 +163,7 @@ export async function POST(request: Request) {
       select: {
         id: true,
         codigoRegistro: true,
-        frenteId: true,
+        elementoId: true,
         actividadId: true,
         registroOrigenId: true,
         fechaEjecucion: true,
@@ -176,7 +190,7 @@ export async function POST(request: Request) {
 
     await validarCoherencia({
       // La ubicacion y la actividad las hereda del anterior.
-      frenteId: anterior.frenteId,
+      elementoId: anterior.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
       fechaEjecucion: datos.fechaEjecucion,
@@ -233,7 +247,7 @@ export async function POST(request: Request) {
           valorM2,
           // La ubicacion y la actividad se heredan: un avance pertenece a la
           // misma obra, no puede cambiar de muro ni de actividad a mitad.
-          frenteId: anterior.frenteId,
+          elementoId: anterior.elementoId,
           actividadId: anterior.actividadId,
           registroAnteriorId: anterior.id,
           registroOrigenId: raizId,

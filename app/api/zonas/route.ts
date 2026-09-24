@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     const zonas = await prisma.zona.findMany({
       where: pisoId ? { pisoId } : undefined,
       orderBy: { codigo: 'asc' },
-      include: { _count: { select: { frentes: true } } },
+      include: { _count: { select: { elementos: true } } },
     })
     return ok(zonas)
   } catch (error) {

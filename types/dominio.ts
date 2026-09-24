@@ -45,15 +45,18 @@ export interface Zona {
   nombre: string
   tipo: string | null
   descripcion: string | null
-  _count?: { frentes: number }
+  _count?: { elementos: number }
 }
 
-export interface Frente {
+export interface Elemento {
   id: number
   zonaId: number
   codigoDwg: string
   descripcion: string
   unidad: string | null
+  /** Las medidas viven aqui: la tarea y el registro de obra las heredan. */
+  largo: number
+  alto: number
   estado: EstadoEjecucion
   zona?: {
     codigo: string
@@ -63,12 +66,14 @@ export interface Frente {
   _count?: { registros: number }
 }
 
-/** Ubicacion completa de un frente, tal como la devuelven los registros. */
-export interface FrenteUbicado {
+/** Ubicacion completa de un elemento, tal como la devuelven los registros. */
+export interface ElementoUbicado {
   id: number
   codigoDwg: string
   descripcion: string
   unidad: string | null
+  largo: number
+  alto: number
   zona: {
     id: number
     codigo: string
@@ -193,7 +198,7 @@ export interface Registro {
   id: number
   codigoRegistro: string
   fechaEjecucion: string
-  frenteId: number
+  elementoId: number
   actividadId: number
   cuadrillaId: number
   trabajadorId: number | null
@@ -217,7 +222,7 @@ export interface Registro {
   /** Tarifa que tenia el trabajador para esa actividad cuando se guardo. */
   valorM2: number | null
   observaciones: string | null
-  frente?: FrenteUbicado
+  elemento?: ElementoUbicado
   actividad?: { id: number; nombre: string; unidadMedida: string }
   cuadrilla?: { id: number; nombre: string }
   trabajador?: {
@@ -295,18 +300,16 @@ export interface Catalogos {
 export interface Tarea {
   id: number
   codigo: string
-  frenteId: number
+  elementoId: number
   actividadId: number
   cuadrillaId: number | null
   trabajadorId: number | null
-  largo: number
-  alto: number
   m2Meta: number | null
   fechaInicioPlan: string | null
   fechaFinPlan: string | null
   estado: EstadoEjecucion
   observaciones: string | null
-  frente?: FrenteUbicado
+  elemento?: ElementoUbicado
   actividad?: { id: number; nombre: string; unidadMedida: string }
   cuadrilla?: { id: number; nombre: string; proyectoId: number } | null
   trabajador?: {

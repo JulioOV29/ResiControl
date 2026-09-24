@@ -25,10 +25,8 @@ export async function PUT(request: Request, { params }: Contexto) {
     const actual = await prisma.tarea.findUnique({
       where: { id },
       select: {
-        frenteId: true,
+        elementoId: true,
         actividadId: true,
-        largo: true,
-        alto: true,
         registro: { select: { codigoRegistro: true } },
       },
     })
@@ -37,28 +35,28 @@ export async function PUT(request: Request, { params }: Contexto) {
     const datos = esquemaTarea.parse(await request.json())
 
     /**
-     * Si la obra ya arranco, el encargo ya se materializo: cambiarle la
-     * ubicacion, la actividad o las medidas dejaria la tarea diciendo una cosa
-     * y lo ejecutado otra. Lo que si se puede corregir es a quien se le asigna,
-     * las fechas previstas, la meta, el estado y las observaciones.
+     * Si la obra ya arranco, el encargo ya se materializo: mover la tarea a
+     * otro elemento o a otra actividad dejaria la tarea diciendo una cosa y lo
+     * ejecutado otra. Lo que si se puede corregir es a quien se le asigna, las
+     * fechas previstas, la meta, el estado y las observaciones.
+     *
+     * Las medidas no aparecen aqui porque ya no son suyas: viven en el elemento
+     * constructivo y se corrigen en su ficha.
      */
     if (actual.registro) {
       const cambio =
-        datos.frenteId !== actual.frenteId ||
-        datos.actividadId !== actual.actividadId ||
-        datos.largo !== Number(String(actual.largo)) ||
-        datos.alto !== Number(String(actual.alto))
+        datos.elementoId !== actual.elementoId || datos.actividadId !== actual.actividadId
 
       if (cambio) {
         throw new ErrorApi(
           409,
-          `La obra ${actual.registro.codigoRegistro} ya nacio de esta tarea: la ubicacion, la actividad y las medidas ya no se pueden cambiar aqui. Corrigelas en el registro de obra.`,
+          `La obra ${actual.registro.codigoRegistro} ya nacio de esta tarea: el elemento y la actividad ya no se pueden cambiar aqui.`,
         )
       }
     }
 
     await validarCoherencia({
-      frenteId: datos.frenteId,
+      elementoId: datos.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
       fechaEjecucion: datos.fechaInicioPlan ?? new Date(),

@@ -78,33 +78,33 @@ export async function GET(request: Request) {
         select: { id: true, nombre: true },
       }),
       // Solo identificadores, sin fechas: distinct deja una fila por cada
-      // frente, actividad, cuadrilla y trabajador que hayan coincidido, y no
+      // elemento, actividad, cuadrilla y trabajador que hayan coincidido, y no
       // una por jornada. Con miles de registros sigue siendo una lista corta.
       conCombinaciones
         ? prisma.registroEjecucion.findMany({
-            distinct: ['frenteId', 'actividadId', 'cuadrillaId', 'trabajadorId'],
+            distinct: ['elementoId', 'actividadId', 'cuadrillaId', 'trabajadorId'],
             select: {
-              frenteId: true,
+              elementoId: true,
               actividadId: true,
               cuadrillaId: true,
               trabajadorId: true,
-              frente: { select: { zonaId: true } },
+              elemento: { select: { zonaId: true } },
             },
           })
         : Promise.resolve(null),
     ])
 
-    // Varios frentes de una misma zona dan la misma combinacion: se quedan
+    // Varios elementos de una misma zona dan la misma combinacion: se quedan
     // con una sola.
     let combinaciones: Array<[number, number, number, number | null]> | undefined
     if (registros) {
       const vistas = new Set<string>()
       combinaciones = []
       for (const r of registros) {
-        const clave = `${r.frente.zonaId}-${r.actividadId}-${r.cuadrillaId}-${r.trabajadorId}`
+        const clave = `${r.elemento.zonaId}-${r.actividadId}-${r.cuadrillaId}-${r.trabajadorId}`
         if (vistas.has(clave)) continue
         vistas.add(clave)
-        combinaciones.push([r.frente.zonaId, r.actividadId, r.cuadrillaId, r.trabajadorId])
+        combinaciones.push([r.elemento.zonaId, r.actividadId, r.cuadrillaId, r.trabajadorId])
       }
     }
 

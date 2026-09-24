@@ -228,7 +228,7 @@ export default function EjecucionPage() {
       clave: 'ubicacion',
       titulo: 'Ubicacion',
       render: (r) => {
-        const z = r.frente?.zona
+        const z = r.elemento?.zona
         if (!z) return '-'
         return (
           <div className="text-sm">
@@ -241,13 +241,13 @@ export default function EjecucionPage() {
       },
     },
     {
-      clave: 'frente',
-      titulo: 'Frente',
+      clave: 'elemento',
+      titulo: 'Elemento',
       soloEscritorio: true,
       render: (r) => (
         <div className="text-sm">
-          <div className="text-obra-900">{r.frente?.descripcion}</div>
-          <div className="text-xs text-obra-400">{r.frente?.codigoDwg}</div>
+          <div className="text-obra-900">{r.elemento?.descripcion}</div>
+          <div className="text-xs text-obra-400">{r.elemento?.codigoDwg}</div>
         </div>
       ),
     },

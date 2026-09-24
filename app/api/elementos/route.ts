@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma'
 import { ok, manejarError, exigirSesion, exigirPermiso } from '@/lib/api'
-import { esquemaFrente } from '@/lib/esquemas'
+import { esquemaElemento } from '@/lib/esquemas'
 
 export async function GET(request: Request) {
   try {
@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     const zonaId = Number(parametros.get('zonaId'))
     const proyectoId = Number(parametros.get('proyectoId'))
 
-    const frentes = await prisma.frenteTrabajo.findMany({
+    const elementos = await prisma.elementoConstructivo.findMany({
       where: zonaId
         ? { zonaId }
         : proyectoId
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
         _count: { select: { registros: true } },
       },
     })
-    return ok(frentes)
+    return ok(elementos)
   } catch (error) {
     return manejarError(error)
   }
@@ -38,8 +38,8 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     await exigirPermiso('gestionar')
-    const datos = esquemaFrente.parse(await request.json())
-    const creado = await prisma.frenteTrabajo.create({ data: datos })
+    const datos = esquemaElemento.parse(await request.json())
+    const creado = await prisma.elementoConstructivo.create({ data: datos })
     return ok(creado, 201)
   } catch (error) {
     return manejarError(error)

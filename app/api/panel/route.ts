@@ -131,7 +131,7 @@ export async function GET(request: Request) {
     // grafica pasa a mostrar sus pisos, y asi sucesivamente.
     const hay = (clave: string) => Boolean(Number(parametros.get(clave)))
     const nivel = hay('zonaId')
-      ? 'frente'
+      ? 'elemento'
       : hay('pisoId')
         ? 'zona'
         : hay('torreId')
@@ -139,16 +139,16 @@ export async function GET(request: Request) {
           : 'torre'
 
     const claveUbicacion = (r: (typeof registros)[number]) => {
-      const z = r.frente.zona
-      if (nivel === 'frente') return String(r.frente.id)
+      const z = r.elemento.zona
+      if (nivel === 'elemento') return String(r.elemento.id)
       if (nivel === 'zona') return String(z.id)
       if (nivel === 'piso') return String(z.piso.id)
       return String(z.piso.torre.id)
     }
 
     const etiquetaUbicacion = (r: (typeof registros)[number]) => {
-      const z = r.frente.zona
-      if (nivel === 'frente') return `${r.frente.codigoDwg} ${r.frente.descripcion}`
+      const z = r.elemento.zona
+      if (nivel === 'elemento') return `${r.elemento.codigoDwg} ${r.elemento.descripcion}`
       if (nivel === 'zona') return z.nombre
       if (nivel === 'piso') return z.piso.nombre || `Piso ${z.piso.numero}`
       return z.piso.torre.nombre

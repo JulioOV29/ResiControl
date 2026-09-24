@@ -40,7 +40,7 @@ enum EstadoProyecto {
   FINALIZADO
 }
 
-/// Estado de avance de una torre o de un frente de trabajo.
+/// Estado de avance de una torre o de un elemento constructivo.
 enum EstadoEjecucion {
   PENDIENTE
   EN_PROCESO
@@ -79,7 +79,7 @@ model Usuario {
 
 // ---------------------------------------------------------------------------
 //  Jerarquia fisica de la obra
-//  Proyecto > Torre > Piso > Zona > Frente de trabajo
+//  Proyecto > Torre > Piso > Zona > Elemento constructivo
 // ---------------------------------------------------------------------------
 
 model Proyecto {
@@ -141,7 +141,7 @@ model Zona {
   descripcion String? @db.VarChar(255)
 
   piso    Piso            @relation(fields: [pisoId], references: [id], onDelete: Cascade)
-  frentes FrenteTrabajo[]
+  elementos ElementoConstructivo[]
 
   @@unique([pisoId, codigo])
   @@index([pisoId])
@@ -151,19 +151,21 @@ model Zona {
 /// Elemento fisico concreto sobre el que se ejecuta una actividad.
 /// codigoDwg no es unico globalmente: el mismo codigo puede repetirse en
 /// distintas ubicaciones, por eso la unicidad se define por zona.
-model FrenteTrabajo {
-  id          Int             @id @default(autoincrement()) @map("id_frente")
+model ElementoConstructivo {
+  id          Int             @id @default(autoincrement()) @map("id_elemento")
   zonaId      Int             @map("id_zona")
   codigoDwg   String          @map("codigo_dwg") @db.VarChar(50)
   descripcion String          @db.VarChar(150)
   unidad      String?         @db.VarChar(20)
   estado      EstadoEjecucion @default(PENDIENTE)
 
-  /// Dimensiones de referencia del elemento fisico. Las que mandan en los
-  /// calculos son las del registro que abre la obra; estas sirven para
-  /// proponerlas al capturar.
-  largo Decimal? @db.Decimal(10, 2)
-  alto  Decimal? @db.Decimal(10, 2)
+  /// Dimensiones del elemento. Se miden una sola vez, aqui, cuando se da de
+  /// alta el muro: es la cantidad que hay que ejecutar. La tarea que se asigne
+  /// sobre el elemento y el registro que abra la obra las heredan; el registro
+  /// ademas se queda con una copia, para que corregir el elemento manana no
+  /// altere los indicadores de lo que ya se midio.
+  largo Decimal @db.Decimal(10, 2)
+  alto  Decimal @db.Decimal(10, 2)
 
   zona      Zona                @relation(fields: [zonaId], references: [id], onDelete: Cascade)
   registros RegistroEjecucion[]
@@ -172,7 +174,7 @@ model FrenteTrabajo {
   @@unique([zonaId, codigoDwg, descripcion])
   @@index([zonaId])
   @@index([codigoDwg])
-  @@map("frentes_trabajo")
+  @@map("elementos_constructivos")
 }
 
 // ---------------------------------------------------------------------------
@@ -334,15 +336,15 @@ model Meta {
 model Tarea {
   id             Int             @id @default(autoincrement()) @map("id_tarea")
   codigo         String          @unique @db.VarChar(30)
-  frenteId       Int             @map("id_frente")
+  elementoId       Int             @map("id_elemento")
   actividadId    Int             @map("id_actividad")
   /// A quien se le asigna. Opcional: se puede programar el trabajo antes de
   /// saber que cuadrilla lo tomara.
   cuadrillaId    Int?            @map("id_cuadrilla")
   trabajadorId   Int?            @map("id_trabajador")
-  /// Medidas del elemento: es la cantidad que hay que ejecutar.
-  largo          Decimal         @db.Decimal(10, 2)
-  alto           Decimal         @db.Decimal(10, 2)
+  /// Las medidas no se repiten aqui: son las del elemento constructivo, que es
+  /// donde se miden una sola vez. La cantidad por ejecutar de la tarea es el
+  /// area de su elemento.
   /// Meta de produccion diaria que hereda el registro.
   m2Meta         Decimal?        @map("m2_meta") @db.Decimal(12, 2)
   fechaInicioPlan DateTime?      @map("fecha_inicio_plan") @db.Date
@@ -353,7 +355,7 @@ model Tarea {
   createdAt      DateTime        @default(now()) @map("created_at")
   updatedAt      DateTime        @updatedAt @map("updated_at")
 
-  frente        FrenteTrabajo @relation(fields: [frenteId], references: [id], onDelete: Restrict)
+  elemento        ElementoConstructivo @relation(fields: [elementoId], references: [id], onDelete: Restrict)
   actividad     Actividad     @relation(fields: [actividadId], references: [id], onDelete: Restrict)
   cuadrilla     Cuadrilla?    @relation(fields: [cuadrillaId], references: [id], onDelete: SetNull)
   trabajador    Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: SetNull)
@@ -363,7 +365,7 @@ model Tarea {
   /// registro, en id_tarea.
   registro RegistroEjecucion?
 
-  @@index([frenteId])
+  @@index([elementoId])
   @@index([actividadId])
   @@index([cuadrillaId])
   @@index([trabajadorId])
@@ -375,7 +377,7 @@ model Tarea {
 //  Tabla central: las jornadas de trabajo
 // ---------------------------------------------------------------------------
 
-/// Un dia de trabajo sobre un frente.
+/// Un dia de trabajo sobre un elemento.
 ///
 /// El primer registro de una obra abre el trabajo y lleva las dimensiones del
 /// elemento. Los registros siguientes son avances: no repiten las medidas, solo
@@ -390,7 +392,7 @@ model RegistroEjecucion {
   id                 Int      @id @default(autoincrement()) @map("id_ejecucion")
   codigoRegistro     String   @unique @map("codigo_registro") @db.VarChar(30)
   fechaEjecucion     DateTime @map("fecha_ejecucion") @db.Date
-  frenteId           Int      @map("id_frente")
+  elementoId           Int      @map("id_elemento")
   actividadId        Int      @map("id_actividad")
   cuadrillaId        Int      @map("id_cuadrilla")
   trabajadorId       Int?     @map("id_trabajador")
@@ -439,7 +441,7 @@ model RegistroEjecucion {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  frente           FrenteTrabajo @relation(fields: [frenteId], references: [id], onDelete: Restrict)
+  elemento           ElementoConstructivo @relation(fields: [elementoId], references: [id], onDelete: Restrict)
   actividad        Actividad     @relation(fields: [actividadId], references: [id], onDelete: Restrict)
   cuadrilla        Cuadrilla     @relation(fields: [cuadrillaId], references: [id], onDelete: Restrict)
   trabajador       Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: SetNull)
@@ -462,7 +464,7 @@ model RegistroEjecucion {
   tarea Tarea? @relation(fields: [tareaId], references: [id], onDelete: SetNull)
 
   @@index([fechaEjecucion])
-  @@index([frenteId])
+  @@index([elementoId])
   @@index([actividadId])
   @@index([cuadrillaId])
   @@index([trabajadorId])

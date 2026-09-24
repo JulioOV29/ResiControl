@@ -14,12 +14,13 @@ import { ConfirmarEliminacion } from '@/components/ui/modal'
 import { FormTorre } from '@/components/formularios/FormTorre'
 import { FormPiso } from '@/components/formularios/FormPiso'
 import { FormZona } from '@/components/formularios/FormZona'
-import { FormFrente } from '@/components/formularios/FormFrente'
-import type { Frente, Piso, Proyecto, Torre, Zona } from '@/types/dominio'
+import { FormElemento } from '@/components/formularios/FormElemento'
+import { formatoNumero } from '@/lib/utils'
+import type { Elemento, Piso, Proyecto, Torre, Zona } from '@/types/dominio'
 
 /**
  * Detalle del proyecto con navegacion por niveles:
- * Torres -> Pisos -> Zonas -> Frentes de trabajo.
+ * Torres -> Pisos -> Zonas -> Elementos constructivos.
  * Un solo componente evita cuatro rutas anidadas y mantiene la ruta migada
  * siempre visible, que es como el residente piensa la obra.
  */
@@ -37,7 +38,7 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
   const torres = useRecurso<Torre>(`/api/torres?proyectoId=${id}`)
   const pisos = useRecurso<Piso>(torre ? `/api/pisos?torreId=${torre.id}` : null)
   const zonas = useRecurso<Zona>(piso ? `/api/zonas?pisoId=${piso.id}` : null)
-  const frentes = useRecurso<Frente>(zona ? `/api/frentes?zonaId=${zona.id}` : null)
+  const elementos = useRecurso<Elemento>(zona ? `/api/elementos?zonaId=${zona.id}` : null)
 
   const [formTorre, setFormTorre] = useState<{ abierto: boolean; registro: Torre | null }>({
     abierto: false,
@@ -51,7 +52,7 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
     abierto: false,
     registro: null,
   })
-  const [formFrente, setFormFrente] = useState<{ abierto: boolean; registro: Frente | null }>({
+  const [formElemento, setFormElemento] = useState<{ abierto: boolean; registro: Elemento | null }>({
     abierto: false,
     registro: null,
   })
@@ -59,7 +60,7 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
   const borrarTorre = useEliminacion('/api/torres', torres.recargar)
   const borrarPiso = useEliminacion('/api/pisos', pisos.recargar)
   const borrarZona = useEliminacion('/api/zonas', zonas.recargar)
-  const borrarFrente = useEliminacion('/api/frentes', frentes.recargar)
+  const borrarElemento = useEliminacion('/api/elementos', elementos.recargar)
 
   const irATorres = () => {
     setTorre(null)
@@ -144,21 +145,37 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
     },
     { clave: 'tipo', titulo: 'Tipo', render: (z) => z.tipo || <span className="text-obra-400">-</span> },
     {
-      clave: 'frentes',
-      titulo: 'Frentes',
+      clave: 'elementos',
+      titulo: 'Elementos',
       alineacion: 'derecha',
-      render: (z) => z._count?.frentes ?? 0,
+      render: (z) => z._count?.elementos ?? 0,
     },
   ]
 
-  const columnasFrentes: Columna<Frente>[] = [
+  const columnasElementos: Columna<Elemento>[] = [
     { clave: 'codigo', titulo: 'Codigo DWG', render: (f) => f.codigoDwg },
     {
       clave: 'descripcion',
       titulo: 'Elemento',
       render: (f) => <span className="font-medium text-obra-900">{f.descripcion}</span>,
     },
-    { clave: 'unidad', titulo: 'Unidad', soloEscritorio: true, render: (f) => f.unidad || '-' },
+    {
+      // Las medidas son la cantidad por ejecutar del elemento: se ven aqui
+      // porque es donde se definen, y de aqui las heredan tarea y registro.
+      clave: 'medidas',
+      titulo: 'Medidas',
+      alineacion: 'derecha',
+      render: (f) => (
+        <span>
+          <span className="block tabular-nums text-obra-900">
+            {formatoNumero(f.largo * f.alto)} {f.unidad || 'm2'}
+          </span>
+          <span className="block text-xs tabular-nums text-obra-500">
+            {formatoNumero(f.largo)} x {formatoNumero(f.alto)} m
+          </span>
+        </span>
+      ),
+    },
     {
       clave: 'registros',
       titulo: 'Registros',
@@ -230,7 +247,7 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
             vacio={
               <EstadoVacio
                 titulo="Sin torres"
-                mensaje="La torre es el primer nivel de la obra. De ella cuelgan los pisos, las zonas y los frentes."
+                mensaje="La torre es el primer nivel de la obra. De ella cuelgan los pisos, las zonas y los elementos."
                 accion={
                   puede.gestionar && (
                     <Boton onClick={() => setFormTorre({ abierto: true, registro: null })}>
@@ -338,42 +355,42 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
         </>
       )}
 
-      {/* Nivel 4: frentes de trabajo */}
+      {/* Nivel 4: elementos constructivos */}
       {zona && (
         <>
           <EncabezadoPagina
-            titulo="Frentes de trabajo"
+            titulo="Elementos constructivos"
             descripcion={`Elementos fisicos de ${zona.nombre}`}
             acciones={
               puede.gestionar && (
-                <Boton onClick={() => setFormFrente({ abierto: true, registro: null })}>
+                <Boton onClick={() => setFormElemento({ abierto: true, registro: null })}>
                   <Plus className="h-4 w-4" />
-                  Nuevo frente
+                  Nuevo elemento
                 </Boton>
               )
             }
           />
           <Tabla
-            columnas={columnasFrentes}
-            filas={frentes.datos}
-            cargando={frentes.cargando}
+            columnas={columnasElementos}
+            filas={elementos.datos}
+            cargando={elementos.cargando}
             acciones={
               puede.gestionar
                 ? (f) => (
                     <AccionesEditarBorrar
-                      onEditar={() => setFormFrente({ abierto: true, registro: f })}
-                      onEliminar={() => borrarFrente.pedir(f.id, `${f.codigoDwg} ${f.descripcion}`)}
+                      onEditar={() => setFormElemento({ abierto: true, registro: f })}
+                      onEliminar={() => borrarElemento.pedir(f.id, `${f.codigoDwg} ${f.descripcion}`)}
                     />
                   )
                 : undefined
             }
             vacio={
               <EstadoVacio
-                titulo="Sin frentes de trabajo"
-                mensaje="El frente es el elemento concreto sobre el que se ejecuta la actividad: un muro, una losa, una fachada. Es lo que se referencia al registrar la obra."
+                titulo="Sin elementos constructivos"
+                mensaje="El elemento constructivo es la pieza concreta sobre la que se ejecuta la actividad: un muro, una losa, una fachada. Aqui se miden sus dimensiones una sola vez, y de aqui las heredan las tareas y los registros de obra."
                 accion={
                   puede.gestionar && (
-                    <Boton onClick={() => setFormFrente({ abierto: true, registro: null })}>
+                    <Boton onClick={() => setFormElemento({ abierto: true, registro: null })}>
                       Crear el primero
                     </Boton>
                   )
@@ -422,14 +439,14 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
       )}
 
       {zona && (
-        <FormFrente
-          abierto={formFrente.abierto}
-          registro={formFrente.registro}
+        <FormElemento
+          abierto={formElemento.abierto}
+          registro={formElemento.registro}
           zonaId={zona.id}
-          onCerrar={() => setFormFrente({ abierto: false, registro: null })}
+          onCerrar={() => setFormElemento({ abierto: false, registro: null })}
           onGuardado={() => {
-            setFormFrente({ abierto: false, registro: null })
-            frentes.recargar()
+            setFormElemento({ abierto: false, registro: null })
+            elementos.recargar()
           }}
         />
       )}
@@ -437,7 +454,7 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
       <ConfirmarEliminacion
         abierto={Boolean(borrarTorre.objetivo)}
         titulo="Eliminar torre"
-        mensaje={`Se eliminara "${borrarTorre.objetivo?.etiqueta}" con sus pisos, zonas y frentes.`}
+        mensaje={`Se eliminara "${borrarTorre.objetivo?.etiqueta}" con sus pisos, zonas y elementos.`}
         procesando={borrarTorre.procesando}
         error={borrarTorre.error}
         onCancelar={borrarTorre.cancelar}
@@ -446,7 +463,7 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
       <ConfirmarEliminacion
         abierto={Boolean(borrarPiso.objetivo)}
         titulo="Eliminar piso"
-        mensaje={`Se eliminara "${borrarPiso.objetivo?.etiqueta}" con sus zonas y frentes.`}
+        mensaje={`Se eliminara "${borrarPiso.objetivo?.etiqueta}" con sus zonas y elementos.`}
         procesando={borrarPiso.procesando}
         error={borrarPiso.error}
         onCancelar={borrarPiso.cancelar}
@@ -455,20 +472,20 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
       <ConfirmarEliminacion
         abierto={Boolean(borrarZona.objetivo)}
         titulo="Eliminar zona"
-        mensaje={`Se eliminara "${borrarZona.objetivo?.etiqueta}" con sus frentes de trabajo.`}
+        mensaje={`Se eliminara "${borrarZona.objetivo?.etiqueta}" con sus elementos constructivos.`}
         procesando={borrarZona.procesando}
         error={borrarZona.error}
         onCancelar={borrarZona.cancelar}
         onConfirmar={borrarZona.confirmar}
       />
       <ConfirmarEliminacion
-        abierto={Boolean(borrarFrente.objetivo)}
-        titulo="Eliminar frente de trabajo"
-        mensaje={`Se eliminara "${borrarFrente.objetivo?.etiqueta}". No se puede si ya tiene registros de obra.`}
-        procesando={borrarFrente.procesando}
-        error={borrarFrente.error}
-        onCancelar={borrarFrente.cancelar}
-        onConfirmar={borrarFrente.confirmar}
+        abierto={Boolean(borrarElemento.objetivo)}
+        titulo="Eliminar elemento constructivo"
+        mensaje={`Se eliminara "${borrarElemento.objetivo?.etiqueta}". No se puede si ya tiene registros de obra.`}
+        procesando={borrarElemento.procesando}
+        error={borrarElemento.error}
+        onCancelar={borrarElemento.cancelar}
+        onConfirmar={borrarElemento.confirmar}
       />
     </div>
   )

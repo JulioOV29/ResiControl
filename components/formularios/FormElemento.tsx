@@ -4,10 +4,11 @@ import { useEffect, useState } from 'react'
 import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion } from '@/components/ui/input'
 import { AvisoError, PieFormulario, useEnvio } from './base'
-import type { Frente } from '@/types/dominio'
+import { formatoNumero } from '@/lib/utils'
+import type { Elemento } from '@/types/dominio'
 import { opcionesEstadoEjecucion as ESTADOS } from '@/lib/dominio'
 
-export function FormFrente({
+export function FormElemento({
   abierto,
   registro,
   zonaId,
@@ -15,7 +16,7 @@ export function FormFrente({
   onGuardado,
 }: {
   abierto: boolean
-  registro: Frente | null
+  registro: Elemento | null
   zonaId: number
   onCerrar: () => void
   onGuardado: () => void
@@ -25,6 +26,8 @@ export function FormFrente({
     codigoDwg: '',
     descripcion: '',
     unidad: 'm2',
+    largo: '',
+    alto: '',
     estado: 'PENDIENTE',
   })
 
@@ -36,16 +39,18 @@ export function FormFrente({
             codigoDwg: registro.codigoDwg,
             descripcion: registro.descripcion,
             unidad: registro.unidad || 'm2',
+            largo: String(registro.largo),
+            alto: String(registro.alto),
             estado: registro.estado,
           }
-        : { codigoDwg: '', descripcion: '', unidad: 'm2', estado: 'PENDIENTE' },
+        : { codigoDwg: '', descripcion: '', unidad: 'm2', largo: '', alto: '', estado: 'PENDIENTE' },
     )
   }, [abierto, registro])
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
     guardar(
-      registro ? `/api/frentes/${registro.id}` : '/api/frentes',
+      registro ? `/api/elementos/${registro.id}` : '/api/elementos',
       registro ? 'PUT' : 'POST',
       { ...form, zonaId },
       onGuardado,
@@ -54,7 +59,7 @@ export function FormFrente({
 
   return (
     <Modal
-      titulo={registro ? 'Editar frente de trabajo' : 'Nuevo frente de trabajo'}
+      titulo={registro ? 'Editar elemento constructivo' : 'Nuevo elemento constructivo'}
       descripcion="El elemento fisico concreto sobre el que se ejecuta la actividad."
       abierto={abierto}
       onCerrar={onCerrar}
@@ -88,6 +93,51 @@ export function FormFrente({
             required
           />
         </Campo>
+
+        {/*
+          Las medidas se miden aqui una sola vez. La tarea que se asigne sobre
+          este elemento y el registro que abra la obra las heredan, asi que no
+          se vuelven a teclear: es la cantidad que hay que ejecutar.
+        */}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Campo etiqueta="Largo (m)" error={errores.largo} requerido>
+            <Entrada
+              type="number"
+              step="0.01"
+              min="0.01"
+              value={form.largo}
+              onChange={(e) => setForm({ ...form, largo: e.target.value })}
+              placeholder="12.00"
+              required
+            />
+          </Campo>
+          <Campo etiqueta="Alto (m)" error={errores.alto} requerido>
+            <Entrada
+              type="number"
+              step="0.01"
+              min="0.01"
+              value={form.alto}
+              onChange={(e) => setForm({ ...form, alto: e.target.value })}
+              placeholder="2.70"
+              required
+            />
+          </Campo>
+          <div className="flex flex-col justify-end pb-1">
+            <p className="text-xs text-obra-500">Cantidad por ejecutar</p>
+            <p className="text-lg font-semibold tabular-nums text-obra-900">
+              {formatoNumero((Number(form.largo) || 0) * (Number(form.alto) || 0))}{' '}
+              <span className="text-sm font-normal text-obra-500">{form.unidad || 'm2'}</span>
+            </p>
+          </div>
+        </div>
+
+        {registro && (
+          <p className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2 text-xs text-obra-500">
+            Corregir las medidas cambia lo que falta por ejecutar de aqui en adelante. Las
+            jornadas ya registradas conservan las que tenian, para que los indicadores de lo ya
+            medido no se muevan.
+          </p>
+        )}
 
         <Campo etiqueta="Estado" error={errores.estado} requerido>
           <Seleccion

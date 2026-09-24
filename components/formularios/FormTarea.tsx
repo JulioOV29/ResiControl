@@ -8,17 +8,18 @@ import { useRecurso, useRecursoUnico } from '@/lib/cliente'
 import { crearEtiquetas } from '@/lib/etiquetas'
 import { fechaParaInput, formatoNumero, hoyTexto } from '@/lib/utils'
 import { opcionesEstadoEjecucion } from '@/lib/dominio'
-import type { Catalogos, Cuadrilla, Frente, Tarea } from '@/types/dominio'
+import type { Catalogos, Cuadrilla, Elemento, Tarea } from '@/types/dominio'
 
 /**
  * Asignar una tarea: el trabajo que se encarga antes de ejecutarlo.
  *
  * Pide los mismos datos con los que luego se registra la jornada, porque es
- * justo lo que el registro va a heredar: donde, que actividad, con que medidas,
- * quien lo hace, para cuando y con que meta.
+ * justo lo que el registro va a heredar: donde, que actividad, quien lo hace,
+ * para cuando y con que meta. Las medidas no se piden: son las del elemento
+ * constructivo, que es donde se miden una sola vez.
  *
  * La ubicacion se elige bajando por la jerarquia (proyecto, torre, piso, zona,
- * frente) igual que en el registro de obra, con la misma jerarquia ya en
+ * elemento) igual que en el registro de obra, con la misma jerarquia ya en
  * memoria: encadenar es filtrar un array, no una peticion por desplegable.
  */
 const vacio = {
@@ -26,12 +27,10 @@ const vacio = {
   torreId: '',
   pisoId: '',
   zonaId: '',
-  frenteId: '',
+  elementoId: '',
   actividadId: '',
   cuadrillaId: '',
   trabajadorId: '',
-  largo: '',
-  alto: '',
   m2Meta: '',
   fechaInicioPlan: hoyTexto(),
   fechaFinPlan: '',
@@ -56,8 +55,8 @@ export function FormTarea({
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
 
   const { dato: catalogos } = useRecursoUnico<Catalogos>(abierto ? '/api/catalogos' : null)
-  const frentes = useRecurso<Frente>(
-    abierto && form.zonaId ? `/api/frentes?zonaId=${form.zonaId}` : null,
+  const elementos = useRecurso<Elemento>(
+    abierto && form.zonaId ? `/api/elementos?zonaId=${form.zonaId}` : null,
   )
   const cuadrilla = useRecursoUnico<Cuadrilla>(
     abierto && form.cuadrillaId ? `/api/cuadrillas/${form.cuadrillaId}` : null,
@@ -104,19 +103,17 @@ export function FormTarea({
       return
     }
     // Al editar, la ubicacion se reconstruye de abajo hacia arriba desde el
-    // frente, que es lo unico que guarda la tarea.
-    const zona = registro.frente?.zona
+    // elemento, que es lo unico que guarda la tarea.
+    const zona = registro.elemento?.zona
     setForm({
       proyectoId: zona ? String(zona.piso.torre.proyecto.id) : '',
       torreId: zona ? String(zona.piso.torre.id) : '',
       pisoId: zona ? String(zona.piso.id) : '',
       zonaId: zona ? String(zona.id) : '',
-      frenteId: String(registro.frenteId),
+      elementoId: String(registro.elementoId),
       actividadId: String(registro.actividadId),
       cuadrillaId: registro.cuadrillaId ? String(registro.cuadrillaId) : '',
       trabajadorId: registro.trabajadorId ? String(registro.trabajadorId) : '',
-      largo: String(registro.largo),
-      alto: String(registro.alto),
       m2Meta: registro.m2Meta === null ? '' : String(registro.m2Meta),
       fechaInicioPlan: fechaParaInput(registro.fechaInicioPlan),
       fechaFinPlan: fechaParaInput(registro.fechaFinPlan),
@@ -125,11 +122,11 @@ export function FormTarea({
     })
   }, [abierto, registro])
 
-  // Si la tarea se llena desde un frente que ya trae medidas, se proponen: es
-  // lo mismo que hay dibujado, y el residente solo confirma.
-  const frenteElegido = frentes.datos.find((f) => String(f.id) === form.frenteId)
+  // Las medidas no se teclean aqui: son las del elemento constructivo, que es
+  // donde se miden una sola vez. La tarea solo dice que hay que hacerlo.
+  const elementoElegido = elementos.datos.find((f) => String(f.id) === form.elementoId)
 
-  const area = (Number(form.largo) || 0) * (Number(form.alto) || 0)
+  const area = elementoElegido ? elementoElegido.largo * elementoElegido.alto : 0
 
   // La obra ya arranco: la ubicacion, la actividad y las medidas quedan fijas,
   // porque lo ejecutado se midio contra ellas.
@@ -160,9 +157,8 @@ export function FormTarea({
 
         {obraIniciada && (
           <p className="rounded-lg border border-marca-200 bg-marca-50 px-3 py-2 text-xs text-marca-700">
-            De esta tarea ya nacio la obra {registro?.registro?.codigoRegistro}. La ubicacion, la
-            actividad y las medidas ya no se cambian aqui: se corrigen en el registro de obra. Lo
-            demas si se puede ajustar.
+            De esta tarea ya nacio la obra {registro?.registro?.codigoRegistro}. El elemento y la
+            actividad ya no se cambian aqui. Lo demas si se puede ajustar.
           </p>
         )}
 
@@ -181,7 +177,7 @@ export function FormTarea({
                     torreId: '',
                     pisoId: '',
                     zonaId: '',
-                    frenteId: '',
+                    elementoId: '',
                     cuadrillaId: '',
                     trabajadorId: '',
                   })
@@ -202,7 +198,7 @@ export function FormTarea({
               <Seleccion
                 value={form.torreId}
                 onChange={(e) =>
-                  cambiar({ torreId: e.target.value, pisoId: '', zonaId: '', frenteId: '' })
+                  cambiar({ torreId: e.target.value, pisoId: '', zonaId: '', elementoId: '' })
                 }
                 disabled={obraIniciada || !form.proyectoId}
                 required
@@ -219,7 +215,7 @@ export function FormTarea({
             <Campo etiqueta="Piso" requerido>
               <Seleccion
                 value={form.pisoId}
-                onChange={(e) => cambiar({ pisoId: e.target.value, zonaId: '', frenteId: '' })}
+                onChange={(e) => cambiar({ pisoId: e.target.value, zonaId: '', elementoId: '' })}
                 disabled={obraIniciada || !form.torreId}
                 required
               >
@@ -235,7 +231,7 @@ export function FormTarea({
             <Campo etiqueta="Zona" requerido>
               <Seleccion
                 value={form.zonaId}
-                onChange={(e) => cambiar({ zonaId: e.target.value, frenteId: '' })}
+                onChange={(e) => cambiar({ zonaId: e.target.value, elementoId: '' })}
                 disabled={obraIniciada || !form.pisoId}
                 required
               >
@@ -248,15 +244,15 @@ export function FormTarea({
               </Seleccion>
             </Campo>
 
-            <Campo etiqueta="Frente de trabajo" error={errores.frenteId} requerido>
+            <Campo etiqueta="Elemento constructivo" error={errores.elementoId} requerido>
               <Seleccion
-                value={form.frenteId}
-                onChange={(e) => cambiar({ frenteId: e.target.value })}
+                value={form.elementoId}
+                onChange={(e) => cambiar({ elementoId: e.target.value })}
                 disabled={obraIniciada || !form.zonaId}
                 required
               >
                 <option value="">Selecciona...</option>
-                {frentes.datos.map((f) => (
+                {elementos.datos.map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.codigoDwg} - {f.descripcion}
                   </option>
@@ -287,29 +283,32 @@ export function FormTarea({
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-obra-500">
             Cantidad por ejecutar
           </p>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Campo etiqueta="Largo (m)" error={errores.largo} requerido>
-              <Entrada
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={form.largo}
-                onChange={(e) => cambiar({ largo: e.target.value })}
-                disabled={obraIniciada}
-                required
-              />
-            </Campo>
-            <Campo etiqueta="Alto (m)" error={errores.alto} requerido>
-              <Entrada
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={form.alto}
-                onChange={(e) => cambiar({ alto: e.target.value })}
-                disabled={obraIniciada}
-                required
-              />
-            </Campo>
+          <div className="grid items-end gap-4 sm:grid-cols-2">
+            {/*
+              Las medidas llegan heredadas del elemento constructivo y no se
+              teclean aqui: un muro se mide una vez, al darlo de alta. Si estan
+              mal, se corrigen en la ficha del elemento.
+            */}
+            <div className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2">
+              <p className="text-xs text-obra-500">Area del elemento</p>
+              {elementoElegido ? (
+                <>
+                  <p className="text-lg font-semibold tabular-nums text-obra-900">
+                    {formatoNumero(area)}{' '}
+                    <span className="text-sm font-normal text-obra-500">
+                      {elementoElegido.unidad || 'm2'}
+                    </span>
+                  </p>
+                  <p className="text-xs tabular-nums text-obra-500">
+                    {formatoNumero(elementoElegido.largo)} x {formatoNumero(elementoElegido.alto)} m
+                    · se miden en la ficha del elemento
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-obra-400">Elige el elemento constructivo</p>
+              )}
+            </div>
+
             <Campo etiqueta="m2 meta por jornada" error={errores.m2Meta}>
               <Entrada
                 type="number"
@@ -320,18 +319,7 @@ export function FormTarea({
                 placeholder="Sin meta"
               />
             </Campo>
-            <div className="flex flex-col justify-end">
-              <p className="text-xs text-obra-500">Area del elemento</p>
-              <p className="text-lg font-semibold tabular-nums text-obra-900">
-                {formatoNumero(area)} <span className="text-sm font-normal text-obra-500">m2</span>
-              </p>
-            </div>
           </div>
-          {frenteElegido?.unidad && (
-            <p className="mt-1 text-xs text-obra-400">
-              El frente se mide en {frenteElegido.unidad}.
-            </p>
-          )}
         </section>
 
         {/* --- A quien y para cuando ---------------------------------------- */}

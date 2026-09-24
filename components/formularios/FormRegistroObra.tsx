@@ -14,7 +14,7 @@ import {
 } from '@/lib/utils'
 import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib/calculos'
 import { crearEtiquetas } from '@/lib/etiquetas'
-import type { Catalogos, Cuadrilla, Frente, Meta, Registro, Tarea } from '@/types/dominio'
+import type { Catalogos, Cuadrilla, Elemento, Meta, Registro, Tarea } from '@/types/dominio'
 
 // La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
 const hoy = hoyTexto
@@ -27,12 +27,10 @@ const vacio = {
   torreId: '',
   pisoId: '',
   zonaId: '',
-  frenteId: '',
+  elementoId: '',
   actividadId: '',
   cuadrillaId: '',
   trabajadorId: '',
-  largo: '',
-  alto: '',
   m2Ejecutados: '',
   horaInicio: '07:00',
   horaFinal: '17:00',
@@ -70,12 +68,12 @@ export function FormRegistroObra({
    * esperaba una ida y vuelta a la base entre un desplegable y el siguiente.
    * Ahora la jerarquia ya esta en memoria y encadenar es filtrar un array.
    *
-   * Los frentes se quedan aparte a proposito: son la parte que crece con el
+   * Los elementos se quedan aparte a proposito: son la parte que crece con el
    * tamaño de la obra y solo hacen falta despues de elegir la zona.
    */
   const { dato: catalogos } = useRecursoUnico<Catalogos>(abierto ? '/api/catalogos' : null)
-  const frentes = useRecurso<Frente>(
-    abierto && form.zonaId ? `/api/frentes?zonaId=${form.zonaId}` : null,
+  const elementos = useRecurso<Elemento>(
+    abierto && form.zonaId ? `/api/elementos?zonaId=${form.zonaId}` : null,
   )
   const cuadrilla = useRecursoUnico<Cuadrilla>(
     abierto && form.cuadrillaId ? `/api/cuadrillas/${form.cuadrillaId}` : null,
@@ -147,11 +145,11 @@ export function FormRegistroObra({
 
   /**
    * Heredar la tarea: se copian sus datos al formulario de una vez, incluida la
-   * ubicacion completa, que se reconstruye desde el frente.
+   * ubicacion completa, que se reconstruye desde el elemento.
    *
    * Se copian, no se enlazan: si ese dia fue otra cuadrilla o el muro midio dos
    * centimetros menos, el residente lo corrige aqui y la tarea se queda como
-   * estaba. Lo unico que la API exige que coincida es el frente y la actividad.
+   * estaba. Lo unico que la API exige que coincida es el elemento y la actividad.
    */
   const heredarTarea = (tareaId: string) => {
     const tarea = tareas.datos.find((t) => String(t.id) === tareaId)
@@ -159,19 +157,17 @@ export function FormRegistroObra({
       cambiar({ tareaId: '' })
       return
     }
-    const zona = tarea.frente?.zona
+    const zona = tarea.elemento?.zona
     cambiar({
       tareaId,
       proyectoId: zona ? String(zona.piso.torre.proyecto.id) : '',
       torreId: zona ? String(zona.piso.torre.id) : '',
       pisoId: zona ? String(zona.piso.id) : '',
       zonaId: zona ? String(zona.id) : '',
-      frenteId: String(tarea.frenteId),
+      elementoId: String(tarea.elementoId),
       actividadId: String(tarea.actividadId),
       cuadrillaId: tarea.cuadrillaId ? String(tarea.cuadrillaId) : '',
       trabajadorId: tarea.trabajadorId ? String(tarea.trabajadorId) : '',
-      largo: String(tarea.largo),
-      alto: String(tarea.alto),
       m2Meta: tarea.m2Meta === null ? '' : String(tarea.m2Meta),
     })
     // La meta viene de la tarea: no hay que volver a proponerla desde las metas
@@ -180,6 +176,19 @@ export function FormRegistroObra({
   }
 
   const tareaElegida = tareas.datos.find((t) => String(t.id) === form.tareaId)
+
+  /**
+   * Las medidas que va a llevar la jornada: las del elemento constructivo.
+   *
+   * Al editar una jornada vieja se muestran las que quedaron copiadas en ella,
+   * que son las que mandan en sus indicadores aunque el elemento se haya
+   * corregido despues.
+   */
+  const elementoElegido = elementos.datos.find((f) => String(f.id) === form.elementoId)
+  const medidasElemento = {
+    largo: elementoElegido?.largo ?? (registro?.largo || 0),
+    alto: elementoElegido?.alto ?? (registro?.alto || 0),
+  }
 
   useEffect(() => {
     if (!abierto) return
@@ -190,7 +199,7 @@ export function FormRegistroObra({
       return
     }
 
-    const zona = registro.frente?.zona
+    const zona = registro.elemento?.zona
     setForm({
       tareaId: registro.tareaId ? String(registro.tareaId) : '',
       fechaEjecucion: fechaParaInput(registro.fechaEjecucion),
@@ -198,12 +207,10 @@ export function FormRegistroObra({
       torreId: String(zona?.piso.torre.id ?? ''),
       pisoId: String(zona?.piso.id ?? ''),
       zonaId: String(zona?.id ?? ''),
-      frenteId: String(registro.frenteId),
+      elementoId: String(registro.elementoId),
       actividadId: String(registro.actividadId),
       cuadrillaId: String(registro.cuadrillaId),
       trabajadorId: registro.trabajadorId ? String(registro.trabajadorId) : '',
-      largo: registro.largo === null ? '' : String(registro.largo),
-      alto: registro.alto === null ? '' : String(registro.alto),
       m2Ejecutados: String(registro.m2Ejecutados),
       horaInicio: dateAHora(registro.horaInicio),
       horaFinal: dateAHora(registro.horaFinal),
@@ -249,7 +256,9 @@ export function FormRegistroObra({
       tiempoRecesoMin: Number(form.tiempoRecesoMin) || 0,
     })
 
-    const area = (Number(form.largo) || 0) * (Number(form.alto) || 0)
+    // El area es la del elemento constructivo: alli se mide una sola vez y de
+    // alli la copia el servidor al guardar la jornada.
+    const area = medidasElemento.largo * medidasElemento.alto
     const hecho = Number(form.m2Ejecutados) || 0
 
     return {
@@ -295,10 +304,10 @@ export function FormRegistroObra({
               <Seleccion value={form.tareaId} onChange={(e) => heredarTarea(e.target.value)}>
                 <option value="">Sin tarea: se captura a mano</option>
                 {tareas.datos.map((t) => {
-                  const zona = t.frente?.zona
+                  const zona = t.elemento?.zona
                   return (
                     <option key={t.id} value={t.id}>
-                      {t.codigo} · {t.actividad?.nombre} · {t.frente?.codigoDwg}
+                      {t.codigo} · {t.actividad?.nombre} · {t.elemento?.codigoDwg}
                       {zona
                         ? ` ${zona.nombre} (${zona.piso.torre.nombre} - ${zona.piso.torre.proyecto.codigo})`
                         : ''}
@@ -344,7 +353,7 @@ export function FormRegistroObra({
                     torreId: '',
                     pisoId: '',
                     zonaId: '',
-                    frenteId: '',
+                    elementoId: '',
                     cuadrillaId: '',
                     trabajadorId: '',
                   })
@@ -364,7 +373,7 @@ export function FormRegistroObra({
               <Seleccion
                 value={form.torreId}
                 onChange={(e) =>
-                  cambiar({ torreId: e.target.value, pisoId: '', zonaId: '', frenteId: '' })
+                  cambiar({ torreId: e.target.value, pisoId: '', zonaId: '', elementoId: '' })
                 }
                 disabled={!form.proyectoId}
                 required
@@ -381,7 +390,7 @@ export function FormRegistroObra({
             <Campo etiqueta="Piso" requerido>
               <Seleccion
                 value={form.pisoId}
-                onChange={(e) => cambiar({ pisoId: e.target.value, zonaId: '', frenteId: '' })}
+                onChange={(e) => cambiar({ pisoId: e.target.value, zonaId: '', elementoId: '' })}
                 disabled={!form.torreId}
                 required
               >
@@ -397,7 +406,7 @@ export function FormRegistroObra({
             <Campo etiqueta="Zona" requerido>
               <Seleccion
                 value={form.zonaId}
-                onChange={(e) => cambiar({ zonaId: e.target.value, frenteId: '' })}
+                onChange={(e) => cambiar({ zonaId: e.target.value, elementoId: '' })}
                 disabled={!form.pisoId}
                 required
               >
@@ -410,15 +419,15 @@ export function FormRegistroObra({
               </Seleccion>
             </Campo>
 
-            <Campo etiqueta="Frente de trabajo" error={errores.frenteId} requerido>
+            <Campo etiqueta="Elemento constructivo" error={errores.elementoId} requerido>
               <Seleccion
-                value={form.frenteId}
-                onChange={(e) => cambiar({ frenteId: e.target.value })}
+                value={form.elementoId}
+                onChange={(e) => cambiar({ elementoId: e.target.value })}
                 disabled={!form.zonaId}
                 required
               >
                 <option value="">Selecciona...</option>
-                {frentes.datos.map((f) => (
+                {elementos.datos.map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.codigoDwg} - {f.descripcion}
                   </option>
@@ -501,28 +510,30 @@ export function FormRegistroObra({
             Medidas del elemento y trabajo del dia
           </h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Campo etiqueta="Largo (m)" error={errores.largo} requerido>
-              <Entrada
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={form.largo}
-                onChange={(e) => cambiar({ largo: e.target.value })}
-                placeholder="12.00"
-                required
-              />
-            </Campo>
-            <Campo etiqueta="Alto (m)" error={errores.alto} requerido>
-              <Entrada
-                type="number"
-                step="0.01"
-                min="0.01"
-                value={form.alto}
-                onChange={(e) => cambiar({ alto: e.target.value })}
-                placeholder="2.70"
-                required
-              />
-            </Campo>
+            {/*
+              Las medidas llegan del elemento constructivo y no se teclean: un
+              muro se mide una vez, al darlo de alta. El servidor las copia a la
+              jornada al guardarla, y esa copia es la que fija el 100% de la
+              obra aunque el elemento se corrija despues.
+            */}
+            <div className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2 sm:col-span-2">
+              <p className="text-xs text-obra-500">Medidas del elemento</p>
+              {medidasElemento.largo > 0 ? (
+                <>
+                  <p className="text-base font-semibold tabular-nums text-obra-900">
+                    {formatoNumero(medidasElemento.largo)} x {formatoNumero(medidasElemento.alto)} m{' '}
+                    <span className="text-sm font-normal text-obra-500">
+                      = {formatoNumero(medidasElemento.largo * medidasElemento.alto)} m2
+                    </span>
+                  </p>
+                  <p className="text-xs text-obra-400">
+                    Se miden en la ficha del elemento constructivo.
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-obra-400">Elige el elemento constructivo</p>
+              )}
+            </div>
             <Campo etiqueta="m2 ejecutados hoy" error={errores.m2Ejecutados} requerido>
               <Entrada
                 type="number"

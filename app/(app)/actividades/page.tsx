@@ -53,7 +53,7 @@ export default function ActividadesPage() {
       <EncabezadoPagina
         titulo="Actividades"
         antetitulo="Catalogos"
-        descripcion="Que se ejecuta sobre cada frente, en que unidad se mide y a cuanto se paga la unidad."
+        descripcion="Que se ejecuta sobre cada elemento constructivo y en que unidad se mide. El precio por unidad se acuerda con cada trabajador, en su ficha."
         acciones={
           puede.gestionar && (
             <Boton onClick={abrirNuevo}>
@@ -81,7 +81,7 @@ export default function ActividadesPage() {
         vacio={
           <EstadoVacio
             titulo="Sin actividades"
-            mensaje="Las actividades son lo que se ejecuta sobre cada frente de trabajo: panete, estuco, mamposteria, pintura."
+            mensaje="Las actividades son lo que se ejecuta sobre cada elemento constructivo: panete, estuco, mamposteria, pintura."
             accion={puede.gestionar && <Boton onClick={abrirNuevo}>Crear la primera</Boton>}
           />
         }

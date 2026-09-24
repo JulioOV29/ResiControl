@@ -77,14 +77,6 @@ ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_tarea_solo_apertura
 
 -- --- tareas -----------------------------------------------------------------
 
-ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_largo_positivo;
-ALTER TABLE tareas ADD CONSTRAINT chk_tarea_largo_positivo
-  CHECK (largo > 0);
-
-ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_alto_positivo;
-ALTER TABLE tareas ADD CONSTRAINT chk_tarea_alto_positivo
-  CHECK (alto > 0);
-
 ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_meta_positiva;
 ALTER TABLE tareas ADD CONSTRAINT chk_tarea_meta_positiva
   CHECK (m2_meta IS NULL OR m2_meta > 0);
@@ -92,6 +84,18 @@ ALTER TABLE tareas ADD CONSTRAINT chk_tarea_meta_positiva
 ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_fechas_coherentes;
 ALTER TABLE tareas ADD CONSTRAINT chk_tarea_fechas_coherentes
   CHECK (fecha_fin_plan IS NULL OR fecha_inicio_plan IS NULL OR fecha_fin_plan >= fecha_inicio_plan);
+
+-- --- elementos_constructivos ------------------------------------------------
+-- Las medidas del elemento se toman una sola vez, al darlo de alta, y de ahi
+-- las heredan la tarea y el registro de obra.
+
+ALTER TABLE elementos_constructivos DROP CONSTRAINT IF EXISTS chk_elemento_largo_positivo;
+ALTER TABLE elementos_constructivos ADD CONSTRAINT chk_elemento_largo_positivo
+  CHECK (largo > 0);
+
+ALTER TABLE elementos_constructivos DROP CONSTRAINT IF EXISTS chk_elemento_alto_positivo;
+ALTER TABLE elementos_constructivos ADD CONSTRAINT chk_elemento_alto_positivo
+  CHECK (alto > 0);
 
 -- --- trabajador_actividad ---------------------------------------------------
 -- El precio por metro se acuerda con la persona, no con la actividad. Cero se

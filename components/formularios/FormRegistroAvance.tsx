@@ -72,7 +72,7 @@ export function FormRegistroAvance({
   const obra = obras.datos.find((o) => String(o.id) === form.obraId) ?? null
 
   const cuadrillas = useRecurso<Cuadrilla>(
-    abierto && obra ? `/api/cuadrillas?proyectoId=${obra.frente?.zona.piso.torre.proyecto.id}` : null,
+    abierto && obra ? `/api/cuadrillas?proyectoId=${obra.elemento?.zona.piso.torre.proyecto.id}` : null,
   )
   const cuadrilla = useRecursoUnico<Cuadrilla>(
     abierto && form.cuadrillaId ? `/api/cuadrillas/${form.cuadrillaId}` : null,
@@ -135,7 +135,7 @@ export function FormRegistroAvance({
     if (!abierto || metaTocada || !obra) return
 
     const parametros = new URLSearchParams({
-      proyectoId: String(obra.frente?.zona.piso.torre.proyecto.id ?? ''),
+      proyectoId: String(obra.elemento?.zona.piso.torre.proyecto.id ?? ''),
       actividadId: String(obra.actividadId),
       fecha: form.fechaEjecucion,
       ...(cargoId ? { cargoId: String(cargoId) } : {}),
@@ -223,8 +223,8 @@ export function FormRegistroAvance({
     )
   }
 
-  const ubicacion = obra?.frente
-    ? `${obra.frente.zona.piso.torre.nombre} · ${obra.frente.zona.nombre} · ${obra.frente.codigoDwg} ${obra.frente.descripcion}`
+  const ubicacion = obra?.elemento
+    ? `${obra.elemento.zona.piso.torre.nombre} · ${obra.elemento.zona.nombre} · ${obra.elemento.codigoDwg} ${obra.elemento.descripcion}`
     : ''
 
   return (
@@ -248,8 +248,8 @@ export function FormRegistroAvance({
             <option value="">Selecciona...</option>
             {obras.datos.map((o) => (
               <option key={o.id} value={o.id}>
-                {o.codigoRegistro} · {o.actividad?.nombre} · {o.frente?.codigoDwg}{' '}
-                {o.frente?.descripcion} — {formatoPorcentaje(Math.min(1, o.resumen.avance))}{' '}
+                {o.codigoRegistro} · {o.actividad?.nombre} · {o.elemento?.codigoDwg}{' '}
+                {o.elemento?.descripcion} — {formatoPorcentaje(Math.min(1, o.resumen.avance))}{' '}
                 ejecutado, quedan {formatoNumero(o.resumen.pendiente)} m2
               </option>
             ))}

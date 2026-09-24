@@ -40,6 +40,8 @@ import {
 } from '@/lib/filtrosRelacionales'
 import { formatoFecha, formatoNumero, formatoPorcentaje, hoyTexto } from '@/lib/utils'
 import { crearEtiquetas } from '@/lib/etiquetas'
+import { CalendarioRegistros } from '@/components/graficas/Calendario'
+import { InformeDia } from '@/components/graficas/InformeDia'
 import type { Catalogos } from '@/types/dominio'
 
 type Panel = {
@@ -62,7 +64,7 @@ type Panel = {
     obrasTerminadas: number
   }
   obrasTerminadas: number
-  nivelUbicacion: 'torre' | 'piso' | 'zona' | 'frente'
+  nivelUbicacion: 'torre' | 'piso' | 'zona' | 'elemento'
   porActividad: Array<{
     clave: string
     etiqueta: string
@@ -124,7 +126,7 @@ const NOMBRE_NIVEL = {
   torre: 'torre',
   piso: 'piso',
   zona: 'zona',
-  frente: 'frente de trabajo',
+  elemento: 'elemento constructivo',
 } as const
 
 const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
@@ -202,6 +204,8 @@ export default function DashboardPage() {
   const [filtros, setFiltros] = useState(filtrosVacios)
   const [rangoPuesto, setRangoPuesto] = useState(false)
   const [paso, setPaso] = useState<Paso>('dia')
+  /** El dia abierto en el informe del calendario. */
+  const [diaAbierto, setDiaAbierto] = useState<string | null>(null)
 
   // Los filtros se aplican cuando el usuario deja de moverlos: un campo de
   // fecha dispara onChange varias veces mientras se escribe y no tiene sentido
@@ -378,6 +382,18 @@ export default function DashboardPage() {
   const sinDatos = !i || i.registros === 0
 
   const datosDia = (dato?.porDia ?? []).map((d) => ({ ...d, etiqueta: fechaCorta(d.fecha) }))
+
+  /**
+   * El informe arranca en el ultimo dia con trabajo, para que la mitad derecha
+   * no nazca vacia, y se queda en el dia elegido mientras ese dia siga
+   * existiendo con los filtros puestos.
+   */
+  const diasDelPeriodo = dato?.porDia ?? []
+  const fechaInforme =
+    diaAbierto && diasDelPeriodo.some((d) => d.fecha === diaAbierto)
+      ? diaAbierto
+      : (diasDelPeriodo[diasDelPeriodo.length - 1]?.fecha ?? null)
+  const informe = diasDelPeriodo.find((d) => d.fecha === fechaInforme) ?? null
   const datosCuadrilla = dato?.porCuadrilla ?? []
   const datosUbicacion = dato?.porUbicacion ?? []
   const datosActividad = dato?.porActividad ?? []
@@ -802,8 +818,64 @@ export default function DashboardPage() {
               </ResponsiveContainer>
             </Grafica>
 
+            {/* 3. El mes como cuadricula: donde hay registros y donde hay huecos */}
+            <Grafica
+              titulo="Calendario de registros"
+              descripcion="Los dias con trabajo van marcados. Pulsa uno para ver su informe al lado; el cursor por encima solo lo asoma."
+              nota="Un solo color a proposito: lo que responde el calendario es que dias hubo trabajo y cuales quedaron en blanco. Cuanto se hizo cada dia esta en la grafica de produccion y en la vista de Datos."
+              vacio={datosDia.length === 0}
+              columnas={['Dia', 'Ejecutado m2', 'Meta m2', 'Horas', 'Jornadas']}
+              filas={datosDia.map((d) => [
+                formatoFecha(d.fecha),
+                formatoNumero(d.m2Ejecutados),
+                d.m2Meta > 0 ? formatoNumero(d.m2Meta) : '-',
+                formatoNumero(d.horasEfectivas, 1),
+                formatoNumero(d.registros, 0),
+              ])}
+            >
+              {/*
+                Dos mitades de la misma tarjeta: a la izquierda el cuando, a la
+                derecha el que paso ese dia. En pantalla angosta se apilan.
+              */}
+              <div className="grid gap-5 md:grid-cols-[minmax(0,320px)_minmax(0,1fr)] md:gap-6">
+                <div className="md:border-r md:border-obra-100 md:pr-6">
+                  <CalendarioRegistros
+                    dias={diasDelPeriodo.map((d) => ({
+                      fecha: d.fecha,
+                      m2Ejecutados: d.m2Ejecutados,
+                      m2Meta: d.m2Meta,
+                      registros: d.registros,
+                      horasEfectivas: d.horasEfectivas,
+                    }))}
+                    seleccionada={fechaInforme}
+                    onSeleccionar={setDiaAbierto}
+                  />
+                </div>
+
+                <InformeDia
+                  dia={
+                    informe
+                      ? {
+                          fecha: informe.fecha,
+                          m2Ejecutados: informe.m2Ejecutados,
+                          m2Meta: informe.m2Meta,
+                          registros: informe.registros,
+                          horasEfectivas: informe.horasEfectivas,
+                          rendimiento: informe.rendimiento,
+                          porActividad: informe.porActividad,
+                        }
+                      : null
+                  }
+                  actividades={datosActividad.map((a) => ({
+                    clave: a.clave,
+                    etiqueta: a.etiqueta,
+                  }))}
+                />
+              </div>
+            </Grafica>
+
             <div className="grid gap-4 xl:grid-cols-2">
-              {/* 3. Rendimiento por dia */}
+              {/* 4. Rendimiento por dia */}
               <Grafica
                 titulo="Rendimiento por dia"
                 descripcion="m2 por hora efectiva de cada jornada."
@@ -989,7 +1061,7 @@ export default function DashboardPage() {
                 {datosUbicacion.map((u, indice) => {
                   const porcentaje = Math.min(100, (u.avance ?? 0) * 100)
                   const completo = porcentaje >= 99.99
-                  const puedeBajar = dato.nivelUbicacion !== 'frente'
+                  const puedeBajar = dato.nivelUbicacion !== 'elemento'
                   return (
                     <li key={u.clave}>
                       <button

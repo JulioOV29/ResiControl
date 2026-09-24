@@ -68,7 +68,7 @@ export default function ProyectosPage() {
     <div>
       <EncabezadoPagina
         titulo="Proyectos"
-        descripcion="Entra a un proyecto para gestionar sus torres, pisos, zonas y frentes de trabajo."
+        descripcion="Entra a un proyecto para gestionar sus torres, pisos, zonas y elementos constructivos."
         acciones={
           puede.gestionar && (
             <Boton onClick={abrirNuevo}>
@@ -116,7 +116,7 @@ export default function ProyectosPage() {
       <ConfirmarEliminacion
         abierto={Boolean(eliminacion.objetivo)}
         titulo="Eliminar proyecto"
-        mensaje={`Se eliminara "${eliminacion.objetivo?.etiqueta}" con todas sus torres, pisos, zonas, frentes, cuadrillas y metas. Esta accion no se puede deshacer.`}
+        mensaje={`Se eliminara "${eliminacion.objetivo?.etiqueta}" con todas sus torres, pisos, zonas, elementos, cuadrillas y metas. Esta accion no se puede deshacer.`}
         procesando={eliminacion.procesando}
         error={eliminacion.error}
         onCancelar={eliminacion.cancelar}

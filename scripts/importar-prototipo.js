@@ -148,7 +148,7 @@ async function main() {
   }
 
   // --- Jerarquia y registros ------------------------------------------------
-  const cache = { torres: {}, pisos: {}, zonas: {}, frentes: {} }
+  const cache = { torres: {}, pisos: {}, zonas: {}, elementos: {} }
 
   for (const r of datos.registros) {
     // Torre
@@ -194,10 +194,10 @@ async function main() {
     }
     const zona = cache.zonas[claveZona]
 
-    // Frente de trabajo
-    const claveFrente = `${zona.id}|${r.codigoDwg}|${r.descripcion}`
-    if (!cache.frentes[claveFrente]) {
-      cache.frentes[claveFrente] = await prisma.frenteTrabajo.upsert({
+    // Elemento constructivo
+    const claveElemento = `${zona.id}|${r.codigoDwg}|${r.descripcion}`
+    if (!cache.elementos[claveElemento]) {
+      cache.elementos[claveElemento] = await prisma.elementoConstructivo.upsert({
         where: {
           zonaId_codigoDwg_descripcion: {
             zonaId: zona.id,
@@ -205,17 +205,21 @@ async function main() {
             descripcion: r.descripcion,
           },
         },
-        update: {},
+        // Las medidas viven en el elemento: cada fila del Excel trae las de su
+        // muro, y son las que luego hereda el registro de obra.
+        update: { largo: r.largo, alto: r.alto },
         create: {
           zonaId: zona.id,
           codigoDwg: r.codigoDwg,
           descripcion: r.descripcion,
           unidad: 'm2',
+          largo: r.largo,
+          alto: r.alto,
           estado: 'EN_PROCESO',
         },
       })
     }
-    const frente = cache.frentes[claveFrente]
+    const elemento = cache.elementos[claveElemento]
 
     // Registro de ejecucion
     const existente = await prisma.registroEjecucion.findUnique({
@@ -228,13 +232,13 @@ async function main() {
       data: {
         codigoRegistro: r.codigo,
         fechaEjecucion: fecha(r.fecha),
-        frenteId: frente.id,
+        elementoId: elemento.id,
         actividadId: actividades[r.actividad].id,
         cuadrillaId: cuadrillas[r.cuadrilla].id,
         trabajadorId: trabajadores[r.trabajador].id,
         usuarioRegistraId: usuario.id,
-        // Cada fila del Excel abre su propia obra: lleva las medidas y no
-        // continua ninguna cadena.
+        // Cada fila del Excel abre su propia obra, y se queda con la copia de
+        // las medidas de su elemento: es lo que fija su 100%.
         largo: r.largo,
         alto: r.alto,
         m2Ejecutados: r.m2Ejecutados,

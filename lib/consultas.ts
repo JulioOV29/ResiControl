@@ -6,13 +6,16 @@ import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { ErrorApi } from '@/lib/api'
 
-/** La ubicacion completa de un frente, desde la zona hasta el proyecto. */
-const ubicacionFrente = {
+/** La ubicacion completa de un elemento, desde la zona hasta el proyecto. */
+const ubicacionElemento = {
   select: {
     id: true,
     codigoDwg: true,
     descripcion: true,
     unidad: true,
+    // Las medidas viven en el elemento: la tarea y el registro las heredan.
+    largo: true,
+    alto: true,
     zona: {
       select: {
         id: true,
@@ -53,7 +56,7 @@ const resumenRegistro = {
 
 /** Relaciones que acompañan a cada registro en listados e informes. */
 export const relacionesRegistro = {
-  frente: ubicacionFrente,
+  elemento: ubicacionElemento,
   actividad: { select: { id: true, nombre: true, unidadMedida: true } },
   cuadrilla: { select: { id: true, nombre: true } },
   trabajador: {
@@ -107,7 +110,7 @@ export const camposPanel = {
   cuadrilla: { select: { nombre: true } },
   actividadId: true,
   actividad: { select: { nombre: true, unidadMedida: true } },
-  frente: {
+  elemento: {
     select: {
       id: true,
       codigoDwg: true,
@@ -165,17 +168,17 @@ export function filtroRegistros(
 
   // La ubicacion filtra por el nivel mas especifico informado: filtrar por zona
   // ya implica el piso, la torre y el proyecto.
-  const frenteId = numero('frenteId')
+  const elementoId = numero('elementoId')
   const zonaId = numero('zonaId')
   const pisoId = numero('pisoId')
   const torreId = numero('torreId')
   const proyectoId = numero('proyectoId')
 
-  if (frenteId) where.frenteId = frenteId
-  else if (zonaId) where.frente = { zonaId }
-  else if (pisoId) where.frente = { zona: { pisoId } }
-  else if (torreId) where.frente = { zona: { piso: { torreId } } }
-  else if (proyectoId) where.frente = { zona: { piso: { torre: { proyectoId } } } }
+  if (elementoId) where.elementoId = elementoId
+  else if (zonaId) where.elemento = { zonaId }
+  else if (pisoId) where.elemento = { zona: { pisoId } }
+  else if (torreId) where.elemento = { zona: { piso: { torreId } } }
+  else if (proyectoId) where.elemento = { zona: { piso: { torre: { proyectoId } } } }
 
   // Solo los registros que abren obra, para listar obras en lugar de jornadas.
   if (parametros.get('soloAperturas') === '1') where.registroOrigenId = null
@@ -281,7 +284,7 @@ const textoFecha = (valor: Date) => valor.toISOString().slice(0, 10)
 /**
  * Comprueba que la jornada sea coherente con el resto del modelo:
  *
- *   - la cuadrilla y el frente tienen que ser del mismo proyecto, porque una
+ *   - la cuadrilla y el elemento tienen que ser del mismo proyecto, porque una
  *     cuadrilla se contrata para una obra concreta;
  *   - el trabajador tiene que haber estado asignado a esa cuadrilla el dia que
  *     se registra, que es justo para lo que existe el historial de
@@ -291,25 +294,25 @@ const textoFecha = (valor: Date) => valor.toISOString().slice(0, 10)
  * de otro proyecto, y los cortes por cuadrilla del panel quedaban sin sentido.
  */
 export async function validarCoherencia(datos: {
-  frenteId: number
+  elementoId: number
   /** Nulo solo en una tarea que todavia no tiene cuadrilla asignada. */
   cuadrillaId: number | null
   trabajadorId: number | null
   fechaEjecucion: Date
 }) {
   if (datos.cuadrillaId === null) {
-    // Sin cuadrilla no hay nada que cruzar, pero el frente tiene que existir.
-    const existe = await prisma.frenteTrabajo.findUnique({
-      where: { id: datos.frenteId },
+    // Sin cuadrilla no hay nada que cruzar, pero el elemento tiene que existir.
+    const existe = await prisma.elementoConstructivo.findUnique({
+      where: { id: datos.elementoId },
       select: { id: true },
     })
-    if (!existe) throw new ErrorApi(404, 'El frente de trabajo no existe')
+    if (!existe) throw new ErrorApi(404, 'El elemento constructivo no existe')
     return
   }
 
-  const [frente, cuadrilla] = await Promise.all([
-    prisma.frenteTrabajo.findUnique({
-      where: { id: datos.frenteId },
+  const [elemento, cuadrilla] = await Promise.all([
+    prisma.elementoConstructivo.findUnique({
+      where: { id: datos.elementoId },
       select: {
         codigoDwg: true,
         zona: {
@@ -325,13 +328,13 @@ export async function validarCoherencia(datos: {
     }),
   ])
 
-  if (!frente) throw new ErrorApi(404, 'El frente de trabajo no existe')
+  if (!elemento) throw new ErrorApi(404, 'El elemento constructivo no existe')
   if (!cuadrilla) throw new ErrorApi(404, 'La cuadrilla no existe')
 
-  if (frente.zona.piso.torre.proyectoId !== cuadrilla.proyectoId) {
+  if (elemento.zona.piso.torre.proyectoId !== cuadrilla.proyectoId) {
     throw new ErrorApi(
       409,
-      `La cuadrilla ${cuadrilla.nombre} no pertenece al proyecto de ${frente.zona.piso.torre.nombre}`,
+      `La cuadrilla ${cuadrilla.nombre} no pertenece al proyecto de ${elemento.zona.piso.torre.nombre}`,
     )
   }
 
@@ -426,7 +429,7 @@ export async function siguienteCodigoDeTarea() {
 
 /** Lo que hace falta de una tarea para pintarla en pantalla. */
 export const relacionesTarea = {
-  frente: ubicacionFrente,
+  elemento: ubicacionElemento,
   actividad: { select: { id: true, nombre: true, unidadMedida: true } },
   cuadrilla: { select: { id: true, nombre: true, proyectoId: true } },
   trabajador: {
@@ -467,8 +470,8 @@ export async function sincronizarEstadoTarea(tareaId: number | null | undefined)
     where: { id: tareaId },
     select: {
       estado: true,
-      largo: true,
-      alto: true,
+      // El area por ejecutar es la del elemento, que es donde se mide.
+      elemento: { select: { largo: true, alto: true } },
       registro: {
         select: { m2Ejecutados: true, avances: { select: { m2Ejecutados: true } } },
       },
@@ -476,7 +479,7 @@ export async function sincronizarEstadoTarea(tareaId: number | null | undefined)
   })
   if (!tarea || tarea.estado === 'SUSPENDIDO') return
 
-  const total = Number(String(tarea.largo)) * Number(String(tarea.alto))
+  const total = Number(String(tarea.elemento.largo)) * Number(String(tarea.elemento.alto))
   const ejecutado = tarea.registro
     ? Number(String(tarea.registro.m2Ejecutados)) +
       sumarEjecutado(tarea.registro.avances)
@@ -510,20 +513,20 @@ export async function tareaDeLaObra(raizId: number) {
  * Comprueba que una obra pueda nacer de esa tarea.
  *
  * Dos reglas: una tarea da lugar a UNA obra, y el registro tiene que ser del
- * mismo frente y de la misma actividad que la tarea. Lo demas (cuadrilla,
+ * mismo elemento y de la misma actividad que la tarea. Lo demas (cuadrilla,
  * trabajador, medidas, meta) se hereda al abrir el formulario pero puede
  * diferir, porque lo que se encarga y lo que pasa en obra no siempre coinciden.
  */
 export async function validarTareaParaObra(
   tareaId: number,
-  datos: { frenteId: number; actividadId: number },
+  datos: { elementoId: number; actividadId: number },
   registroActualId?: number,
 ) {
   const tarea = await prisma.tarea.findUnique({
     where: { id: tareaId },
     select: {
       codigo: true,
-      frenteId: true,
+      elementoId: true,
       actividadId: true,
       registro: { select: { id: true, codigoRegistro: true } },
     },
@@ -537,10 +540,30 @@ export async function validarTareaParaObra(
     )
   }
 
-  if (tarea.frenteId !== datos.frenteId || tarea.actividadId !== datos.actividadId) {
+  if (tarea.elementoId !== datos.elementoId || tarea.actividadId !== datos.actividadId) {
     throw new ErrorApi(
       409,
-      `El registro tiene que ser del mismo frente y la misma actividad de la tarea ${tarea.codigo}`,
+      `El registro tiene que ser del mismo elemento y la misma actividad de la tarea ${tarea.codigo}`,
     )
   }
+}
+
+/**
+ * Las medidas del elemento constructivo, que es donde se miden una sola vez.
+ *
+ * El registro que abre la obra se queda con una copia, no con una referencia:
+ * si manana se corrige el muro, los indicadores de lo que ya se midio no
+ * cambian. Esta funcion es la que hace esa copia.
+ */
+export async function medidasDelElemento(elementoId: number) {
+  const elemento = await prisma.elementoConstructivo.findUnique({
+    where: { id: elementoId },
+    select: { codigoDwg: true, descripcion: true, largo: true, alto: true },
+  })
+  if (!elemento) throw new ErrorApi(404, 'El elemento constructivo no existe')
+
+  const largo = Number(String(elemento.largo))
+  const alto = Number(String(elemento.alto))
+
+  return { largo, alto, area: largo * alto, elemento }
 }

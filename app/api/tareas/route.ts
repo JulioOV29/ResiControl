@@ -32,9 +32,9 @@ export async function GET(request: Request) {
     const tareas = await prisma.tarea.findMany({
       where: {
         ...(torreId
-          ? { frente: { zona: { piso: { torreId } } } }
+          ? { elemento: { zona: { piso: { torreId } } } }
           : proyectoId
-            ? { frente: { zona: { piso: { torre: { proyectoId } } } } }
+            ? { elemento: { zona: { piso: { torre: { proyectoId } } } } }
             : {}),
         ...(estado && ESTADOS_EJECUCION.includes(estado as EstadoEjecucion)
           ? { estado: estado as EstadoEjecucion }
@@ -58,10 +58,10 @@ export async function POST(request: Request) {
     const datos = esquemaTarea.parse(await request.json())
 
     // Las mismas reglas que una jornada: la cuadrilla tiene que ser del
-    // proyecto del frente, y el trabajador tiene que estar en esa cuadrilla en
+    // proyecto del elemento, y el trabajador tiene que estar en esa cuadrilla en
     // la fecha prevista de inicio.
     await validarCoherencia({
-      frenteId: datos.frenteId,
+      elementoId: datos.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
       fechaEjecucion: datos.fechaInicioPlan ?? new Date(),

@@ -72,11 +72,11 @@ export function DetalleRegistro({
             <Dato
               etiqueta="Ubicacion"
               valor={
-                dato.frente ? (
+                dato.elemento ? (
                   <>
-                    {dato.frente.zona.piso.torre.nombre} ·{' '}
-                    {dato.frente.zona.piso.nombre || `Piso ${dato.frente.zona.piso.numero}`} ·{' '}
-                    {dato.frente.zona.nombre}
+                    {dato.elemento.zona.piso.torre.nombre} ·{' '}
+                    {dato.elemento.zona.piso.nombre || `Piso ${dato.elemento.zona.piso.numero}`} ·{' '}
+                    {dato.elemento.zona.nombre}
                   </>
                 ) : (
                   '-'
@@ -84,8 +84,8 @@ export function DetalleRegistro({
               }
             />
             <Dato
-              etiqueta="Frente"
-              valor={dato.frente ? `${dato.frente.codigoDwg} · ${dato.frente.descripcion}` : '-'}
+              etiqueta="Elemento"
+              valor={dato.elemento ? `${dato.elemento.codigoDwg} · ${dato.elemento.descripcion}` : '-'}
             />
             <Dato etiqueta="Cuadrilla" valor={dato.cuadrilla?.nombre ?? '-'} />
             <Dato

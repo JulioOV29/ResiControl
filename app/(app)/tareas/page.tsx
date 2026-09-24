@@ -17,9 +17,12 @@ import { ETIQUETA_ESTADO_EJECUCION, ESTADOS_EJECUCION } from '@/lib/dominio'
 import { formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
 import type { Catalogos, EstadoEjecucion, Tarea } from '@/types/dominio'
 
-/** Como va la tarea: lo ejecutado de su obra sobre el area que encarga. */
+/**
+ * Como va la tarea: lo ejecutado de su obra sobre el area de su elemento, que
+ * es donde viven las medidas.
+ */
 function avanceDe(t: Tarea) {
-  const total = t.largo * t.alto
+  const total = (t.elemento?.largo ?? 0) * (t.elemento?.alto ?? 0)
   const ejecutado = t.registro
     ? t.registro.m2Ejecutados + t.registro.avances.reduce((s, a) => s + a.m2Ejecutados, 0)
     : 0
@@ -68,12 +71,12 @@ export default function TareasPage() {
       clave: 'ubicacion',
       titulo: 'Ubicacion',
       render: (t) => {
-        const zona = t.frente?.zona
+        const zona = t.elemento?.zona
         if (!zona) return '-'
         return (
           <span>
             <span className="block text-obra-900">
-              {t.frente?.codigoDwg} · {zona.nombre}
+              {t.elemento?.codigoDwg} · {zona.nombre}
             </span>
             <span className="block text-xs text-obra-500">
               {zona.piso.torre.nombre} · {zona.piso.nombre || `Piso ${zona.piso.numero}`} -{' '}
@@ -205,7 +208,7 @@ export default function TareasPage() {
         vacio={
           <EstadoVacio
             titulo="Sin tareas asignadas"
-            mensaje="Asigna el trabajo con su ubicacion, sus medidas y a quien le toca. Al registrar la obra, el registro hereda todo eso."
+            mensaje="Asigna el trabajo con su ubicacion, su actividad y a quien le toca. Las medidas salen del elemento constructivo, y el registro de obra hereda todo eso."
             accion={puede.gestionar && <Boton onClick={abrirNueva}>Asignar la primera</Boton>}
           />
         }

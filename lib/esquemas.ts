@@ -92,11 +92,24 @@ export const esquemaZona = z.object({
   descripcion: textoOpcional(255),
 })
 
-export const esquemaFrente = z.object({
+const medida = (nombre: string) =>
+  z.coerce
+    .number({ message: `${nombre} debe ser un numero` })
+    .gt(0, `${nombre} debe ser mayor que cero`)
+    .max(99999.99, `${nombre} es demasiado grande`)
+
+/**
+ * El elemento constructivo: el muro, la losa o la fachada concreta sobre la que
+ * se ejecuta una actividad. Aqui viven sus medidas, y solo aqui: la tarea que
+ * se asigne sobre el y el registro que abra la obra las heredan.
+ */
+export const esquemaElemento = z.object({
   zonaId: z.coerce.number().int().positive('Selecciona una zona'),
   codigoDwg: texto(50, 'El codigo DWG'),
   descripcion: texto(150, 'La descripcion'),
   unidad: textoOpcional(20),
+  largo: medida('El largo'),
+  alto: medida('El alto'),
   estado: z.enum(ESTADOS_EJECUCION),
 })
 
@@ -223,7 +236,7 @@ export const esquemaUsuarioEdicion = z.object({
  */
 export const esquemaTarea = z
   .object({
-    frenteId: z.coerce.number().int().positive('Selecciona un frente de trabajo'),
+    elementoId: z.coerce.number().int().positive('Selecciona un elemento constructivo'),
     actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
     // Se puede programar el trabajo antes de saber quien lo hara.
     cuadrillaId: z
@@ -234,14 +247,7 @@ export const esquemaTarea = z
       .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
       .optional()
       .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
-    largo: z.coerce
-      .number({ message: 'El largo debe ser un numero' })
-      .gt(0, 'El largo debe ser mayor que cero')
-      .max(99999.99, 'El largo es demasiado grande'),
-    alto: z.coerce
-      .number({ message: 'El alto debe ser un numero' })
-      .gt(0, 'El alto debe ser mayor que cero')
-      .max(99999.99, 'El alto es demasiado grande'),
+    // Las medidas no se piden: son las del elemento constructivo.
     m2Meta: decimalOpcional('Los m2 meta').transform((v) => (v && v > 0 ? v : null)),
     fechaInicioPlan: fechaOpcional,
     fechaFinPlan: fechaOpcional,
@@ -314,23 +320,14 @@ export const esquemaRegistroObra = z
       .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
       .optional()
       .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
-    frenteId: z.coerce.number().int().positive('Selecciona un frente de trabajo'),
+    elementoId: z.coerce.number().int().positive('Selecciona un elemento constructivo'),
     actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
-    largo: z.coerce
-      .number({ message: 'El largo debe ser un numero' })
-      .gt(0, 'El largo debe ser mayor que cero')
-      .max(99999.99, 'El largo es demasiado grande'),
-    alto: z.coerce
-      .number({ message: 'El alto debe ser un numero' })
-      .gt(0, 'El alto debe ser mayor que cero')
-      .max(99999.99, 'El alto es demasiado grande'),
+    // Las medidas no viajan desde el navegador: el servidor las copia del
+    // elemento constructivo, que es donde se miden. Que lo ejecutado no pase
+    // del area se comprueba alli mismo, por la misma razon.
   })
   .refine((d) => d.horaFinal > d.horaInicio, mensajeHoraFinal)
   .refine(recesoCabe, mensajeReceso)
-  .refine((d) => d.m2Ejecutados <= d.largo * d.alto + 0.005, {
-    message: 'Lo ejecutado no puede superar el area del elemento',
-    path: ['m2Ejecutados'],
-  })
 
 /**
  * Registro de AVANCE: continua una obra ya abierta. No repite la ubicacion ni
