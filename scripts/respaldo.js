@@ -63,7 +63,27 @@ const SUAVE = process.argv.includes('--suave')
 /** Cuantos respaldos se conservan. Los mas viejos se van borrando solos. */
 const MAXIMO = 30
 
+/**
+ * Neon suspende el proyecto cuando lleva un rato sin uso, y la primera consulta
+ * se encuentra el servidor dormido. Antes de darse por vencido, el respaldo lo
+ * intenta tres veces: despertarlo tarda unos segundos, no mas.
+ */
+async function despertarBase() {
+  for (let intento = 1; intento <= 3; intento++) {
+    try {
+      await prisma.$queryRaw`SELECT 1`
+      return
+    } catch (error) {
+      if (intento === 3) throw error
+      console.log(`La base no responde todavia (intento ${intento} de 3), suele estar dormida...`)
+      await new Promise((r) => setTimeout(r, 5000))
+    }
+  }
+}
+
 async function main() {
+  await despertarBase()
+
   const contenido = { generado: new Date().toISOString(), tablas: {} }
 
   for (const tabla of TABLAS) {

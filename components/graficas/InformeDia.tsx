@@ -143,27 +143,30 @@ export function InformeDia({
         {reparto.length === 0 ? (
           <p className="text-xs text-obra-400">Sin produccion registrada.</p>
         ) : (
-          <ul className="space-y-2">
+          // Lista y no barras: son pocas actividades y lo que se compara son
+          // cantidades concretas, que se leen mejor como numero alineado.
+          <ul className="divide-y divide-obra-100 rounded-lg border border-obra-100">
             {reparto.map((a) => {
               const parte = dia.m2Ejecutados > 0 ? a.m2 / dia.m2Ejecutados : 0
               return (
-                <li key={a.etiqueta}>
-                  <div className="flex items-baseline justify-between gap-3 text-xs">
-                    <span className="truncate font-medium text-obra-800">{a.etiqueta}</span>
-                    <span className="shrink-0 tabular-nums text-obra-900">
-                      {formatoNumero(a.m2)} m2
-                      <span className="ml-1.5 text-obra-400">{formatoPorcentaje(parte, 0)}</span>
-                    </span>
-                  </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-obra-100">
-                    <div
-                      className="h-full rounded-full bg-marca-600"
-                      style={{ width: `${Math.max(2, parte * 100)}%` }}
-                    />
-                  </div>
+                <li
+                  key={a.etiqueta}
+                  className="flex items-baseline justify-between gap-3 px-3 py-2 text-xs"
+                >
+                  <span className="truncate font-medium text-obra-800">{a.etiqueta}</span>
+                  <span className="shrink-0 tabular-nums">
+                    <span className="font-semibold text-obra-900">{formatoNumero(a.m2)} m2</span>
+                    <span className="ml-2 text-obra-400">{formatoPorcentaje(parte, 0)}</span>
+                  </span>
                 </li>
               )
             })}
+            <li className="flex items-baseline justify-between gap-3 bg-obra-50 px-3 py-2 text-xs font-semibold">
+              <span className="text-obra-700">Total del dia</span>
+              <span className="tabular-nums text-obra-900">
+                {formatoNumero(dia.m2Ejecutados)} m2
+              </span>
+            </li>
           </ul>
         )}
       </div>

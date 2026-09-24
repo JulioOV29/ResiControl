@@ -837,7 +837,7 @@ export default function DashboardPage() {
                 Dos mitades de la misma tarjeta: a la izquierda el cuando, a la
                 derecha el que paso ese dia. En pantalla angosta se apilan.
               */}
-              <div className="grid gap-5 md:grid-cols-[minmax(0,320px)_minmax(0,1fr)] md:gap-6">
+              <div className="grid gap-5 md:grid-cols-2 md:gap-6">
                 <div className="md:border-r md:border-obra-100 md:pr-6">
                   <CalendarioRegistros
                     dias={diasDelPeriodo.map((d) => ({
