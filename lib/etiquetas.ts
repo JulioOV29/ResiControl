@@ -15,6 +15,17 @@ import type { Catalogos } from '@/types/dominio'
 
 type CatalogosUbicacion = Pick<Catalogos, 'proyectos' | 'torres' | 'pisos'>
 
+/**
+ * Marca lo que esta dado de baja. Una actividad, una cuadrilla o un trabajador
+ * retirados siguen apareciendo en los filtros (su produccion pasada esta ahi y
+ * hay que poder consultarla), pero tienen que distinguirse de los vigentes: si
+ * se retiro "Mamposteria" y se creo otra con el mismo nombre, dos opciones
+ * identicas en la lista no dicen cual es cual.
+ */
+export function conBaja(texto: string, activo: boolean) {
+  return activo ? texto : `${texto} · inactiva`
+}
+
 /** Une un texto con el codigo de su proyecto, si se conoce. */
 export function conProyecto(texto: string, codigoProyecto?: string | null) {
   return codigoProyecto ? `${texto} - ${codigoProyecto}` : texto

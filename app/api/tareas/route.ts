@@ -1,7 +1,13 @@
 import { prisma } from '@/lib/prisma'
 import { ok, manejarError, exigirSesion, exigirPermiso } from '@/lib/api'
 import { esquemaTarea } from '@/lib/esquemas'
-import { relacionesTarea, siguienteCodigoDeTarea, validarCoherencia } from '@/lib/consultas'
+import {
+  relacionesTarea,
+  siguienteCodigoDeTarea,
+  validarCoherencia,
+  validarTareaUnica,
+  exigirPrecioAcordado,
+} from '@/lib/consultas'
 import { ESTADOS_EJECUCION } from '@/lib/dominio'
 import type { EstadoEjecucion } from '@/lib/dominio'
 
@@ -56,6 +62,12 @@ export async function POST(request: Request) {
   try {
     const sesion = await exigirPermiso('gestionar')
     const datos = esquemaTarea.parse(await request.json())
+
+    // Un trabajo se encarga una vez: dos tareas sobre el mismo muro y la misma
+    // actividad acababan abriendo dos obras de lo mismo.
+    await validarTareaUnica(datos.elementoId, datos.actividadId)
+    // Se encarga a quien ya tiene precio acordado para esa actividad.
+    await exigirPrecioAcordado(datos.trabajadorId, datos.actividadId)
 
     // Las mismas reglas que una jornada: la cuadrilla tiene que ser del
     // proyecto del elemento, y el trabajador tiene que estar en esa cuadrilla en

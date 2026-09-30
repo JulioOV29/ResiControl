@@ -241,6 +241,9 @@ async function main() {
         // las medidas de su elemento: es lo que fija su 100%.
         largo: r.largo,
         alto: r.alto,
+        // Todas las actividades del Excel se miden en m2: la cantidad total de
+        // la obra es largo x alto.
+        cantidadTotal: Math.round(r.largo * r.alto * 100) / 100,
         m2Ejecutados: r.m2Ejecutados,
         horaInicio: hora(r.horaInicio),
         horaFinal: hora(r.horaFinal),

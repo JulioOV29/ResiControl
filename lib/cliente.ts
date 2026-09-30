@@ -6,7 +6,7 @@ export type ErrorCampo = { campo: string; mensaje: string }
 
 export type Respuesta<T> =
   | { ok: true; datos: T }
-  | { ok: false; error: string; campos?: ErrorCampo[] }
+  | { ok: false; error: string; campos?: ErrorCampo[]; codigo?: string }
 
 /**
  * Envoltura unica de fetch: traduce cualquier respuesta de la API a un
@@ -16,6 +16,11 @@ export type Respuesta<T> =
 export async function pedir<T>(url: string, opciones?: RequestInit): Promise<Respuesta<T>> {
   try {
     const respuesta = await fetch(url, {
+      // Nada de esto se sirve desde la cache del navegador. Son datos vivos y
+      // con sesion: una lista de actividades o de registros guardada de hace un
+      // rato se ve exactamente igual que una al dia, y ahi no hay como darse
+      // cuenta de que lo que se esta leyendo es viejo.
+      cache: 'no-store',
       ...opciones,
       headers: {
         'Content-Type': 'application/json',
@@ -31,6 +36,7 @@ export async function pedir<T>(url: string, opciones?: RequestInit): Promise<Res
         ok: false,
         error: cuerpo?.error || 'No se pudo completar la operacion',
         campos: Array.isArray(cuerpo?.detalle) ? cuerpo.detalle : undefined,
+        codigo: typeof cuerpo?.codigo === 'string' ? cuerpo.codigo : undefined,
       }
     }
 
@@ -100,6 +106,28 @@ export function useRetardo<T>(valor: T, milisegundos = 350): T {
   }, [valor, milisegundos])
 
   return retrasado
+}
+
+/**
+ * Vuelve a pedir los datos cuando la pestana recupera el foco.
+ *
+ * Las pantallas piden sus catalogos al montarse y ahi se quedan. Si se da de
+ * alta una actividad en otra pestana, el panel sigue ensenando la lista con la
+ * que nacio hasta que se recargue a mano. Esto lo resuelve en el momento en que
+ * el usuario vuelve, que es justo cuando va a mirar.
+ */
+export function useRefrescoAlVolver(recargar: () => void) {
+  useEffect(() => {
+    const alVolver = () => {
+      if (document.visibilityState === 'visible') recargar()
+    }
+    window.addEventListener('focus', alVolver)
+    document.addEventListener('visibilitychange', alVolver)
+    return () => {
+      window.removeEventListener('focus', alVolver)
+      document.removeEventListener('visibilitychange', alVolver)
+    }
+  }, [recargar])
 }
 
 /** Convierte la lista de errores por campo en un objeto para el formulario. */

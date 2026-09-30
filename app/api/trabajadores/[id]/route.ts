@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { ok, manejarError, exigirPermiso, idDeRuta } from '@/lib/api'
+import { ok, manejarError, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
 import { esquemaTrabajador } from '@/lib/esquemas'
 
 type Contexto = { params: Promise<{ id: string }> }
@@ -56,6 +56,25 @@ export async function DELETE(_request: Request, { params }: Contexto) {
   try {
     await exigirPermiso('gestionar')
     const id = await idDeRuta(params)
+
+    /**
+     * Quien ya trabajo no se borra: sus jornadas guardan lo que se le pago
+     * (valor_m2), y borrarlo las dejaba pagadas sin dueño. Para sacarlo de las
+     * listas se desactiva en su ficha. La base tambien lo impide (RESTRICT);
+     * esto solo lo explica mejor.
+     */
+    const [jornadas, trabajador] = await Promise.all([
+      prisma.registroEjecucion.count({ where: { trabajadorId: id } }),
+      prisma.trabajador.findUnique({ where: { id }, select: { nombre: true, apellido: true } }),
+    ])
+    if (!trabajador) throw new ErrorApi(404, 'El trabajador no existe')
+    if (jornadas > 0) {
+      throw new ErrorApi(
+        409,
+        `${trabajador.nombre} ${trabajador.apellido} tiene ${jornadas} jornada${jornadas === 1 ? '' : 's'} registrada${jornadas === 1 ? '' : 's'}: no se puede eliminar. Desactivalo en su ficha para sacarlo de las listas.`,
+      )
+    }
+
     await prisma.trabajador.delete({ where: { id } })
     return ok({ mensaje: 'Trabajador eliminado' })
   } catch (error) {

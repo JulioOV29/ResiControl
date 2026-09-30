@@ -5,6 +5,8 @@
 import type { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { ErrorApi } from '@/lib/api'
+import { cantidadDeObra } from '@/lib/calculos'
+import { cantidadDelElemento, modoCantidad, normalizarUnidad } from '@/lib/dominio'
 
 /** La ubicacion completa de un elemento, desde la zona hasta el proyecto. */
 const ubicacionElemento = {
@@ -51,6 +53,7 @@ const resumenRegistro = {
     m2Ejecutados: true,
     largo: true,
     alto: true,
+    cantidadTotal: true,
   },
 } as const
 
@@ -76,6 +79,8 @@ export const relacionesRegistro = {
   continuacion: { select: { id: true, codigoRegistro: true, fechaEjecucion: true } },
   /// La tarea de la que nacio la obra, para poder volver al encargo.
   tarea: { select: { id: true, codigo: true } },
+  /// La liquidacion en que se pago, si ya se pago.
+  liquidacion: { select: { id: true, codigo: true } },
 } as const
 
 /**
@@ -91,12 +96,13 @@ export const camposIndicadores = {
   registroOrigenId: true,
   largo: true,
   alto: true,
+  cantidadTotal: true,
   m2Ejecutados: true,
   m2Meta: true,
   horaInicio: true,
   horaFinal: true,
   tiempoRecesoMin: true,
-  registroOrigen: { select: { largo: true, alto: true } },
+  registroOrigen: { select: { largo: true, alto: true, cantidadTotal: true } },
 } as const
 
 /**
@@ -155,6 +161,12 @@ export function filtroRegistros(
 
   const actividadId = numero('actividadId')
   if (actividadId) where.actividadId = actividadId
+
+  // La unidad en que se mide la actividad. Sumar m2 con metros lineales o con
+  // unidades da un numero que no es nada, asi que el panel filtra siempre por
+  // una sola.
+  const unidad = parametros.get('unidad')
+  if (unidad) where.actividad = { unidadMedida: unidad }
 
   const cuadrillaId = numero('cuadrillaId')
   if (cuadrillaId) where.cuadrillaId = cuadrillaId
@@ -253,14 +265,16 @@ export async function estadoDeObra(raizId: number, excluirRegistroId?: number) {
       codigoRegistro: true,
       largo: true,
       alto: true,
+      cantidadTotal: true,
       m2Ejecutados: true,
+      actividad: { select: { unidadMedida: true } },
       avances: { select: { id: true, m2Ejecutados: true } },
     },
   })
 
   if (!raiz) return null
 
-  const total = Number(String(raiz.largo ?? 0)) * Number(String(raiz.alto ?? 0))
+  const total = cantidadDeObra(raiz)
   const dias = [
     { id: raiz.id, m2Ejecutados: raiz.m2Ejecutados },
     ...raiz.avances,
@@ -271,6 +285,7 @@ export async function estadoDeObra(raizId: number, excluirRegistroId?: number) {
   return {
     raizId: raiz.id,
     codigoRaiz: raiz.codigoRegistro,
+    unidad: raiz.actividad.unidadMedida,
     total,
     ejecutado,
     pendiente: Math.max(0, total - ejecutado),
@@ -448,6 +463,7 @@ export const relacionesTarea = {
       codigoRegistro: true,
       fechaEjecucion: true,
       m2Ejecutados: true,
+      cantidadTotal: true,
       avances: { select: { m2Ejecutados: true } },
     },
   },
@@ -473,13 +489,24 @@ export async function sincronizarEstadoTarea(tareaId: number | null | undefined)
       // El area por ejecutar es la del elemento, que es donde se mide.
       elemento: { select: { largo: true, alto: true } },
       registro: {
-        select: { m2Ejecutados: true, avances: { select: { m2Ejecutados: true } } },
+        select: {
+          largo: true,
+          alto: true,
+          cantidadTotal: true,
+          m2Ejecutados: true,
+          avances: { select: { m2Ejecutados: true } },
+        },
       },
     },
   })
   if (!tarea || tarea.estado === 'SUSPENDIDO') return
 
-  const total = Number(String(tarea.elemento.largo)) * Number(String(tarea.elemento.alto))
+  // La cantidad es la que se copio en la obra, no la del elemento de hoy: si el
+  // muro se corrigio despues, la tarea y la obra tienen que seguir de acuerdo
+  // en si esta terminada.
+  const total = tarea.registro
+    ? cantidadDeObra(tarea.registro)
+    : Number(String(tarea.elemento.largo)) * Number(String(tarea.elemento.alto))
   const ejecutado = tarea.registro
     ? Number(String(tarea.registro.m2Ejecutados)) +
       sumarEjecutado(tarea.registro.avances)
@@ -549,21 +576,162 @@ export async function validarTareaParaObra(
 }
 
 /**
- * Las medidas del elemento constructivo, que es donde se miden una sola vez.
+ * Las medidas del elemento constructivo y la cantidad total de la obra que se
+ * abre sobre el con esa actividad.
  *
  * El registro que abre la obra se queda con una copia, no con una referencia:
  * si manana se corrige el muro, los indicadores de lo que ya se midio no
- * cambian. Esta funcion es la que hace esa copia.
+ * cambian. Esta funcion es la que calcula esa copia.
+ *
+ * La cantidad depende de la unidad de la actividad (ver modoCantidad): m2 es
+ * largo x alto, ml es el largo, y und, m3 o kg los escribe el residente,
+ * porque las medidas del muro no dicen cuantos tomacorrientes lleva. Lo que
+ * mande el navegador solo cuenta en ese ultimo caso.
  */
-export async function medidasDelElemento(elementoId: number) {
-  const elemento = await prisma.elementoConstructivo.findUnique({
-    where: { id: elementoId },
-    select: { codigoDwg: true, descripcion: true, largo: true, alto: true },
-  })
+export async function cantidadParaObra(
+  elementoId: number,
+  actividadId: number,
+  cantidadCapturada: number | null | undefined,
+) {
+  const [elemento, actividad] = await Promise.all([
+    prisma.elementoConstructivo.findUnique({
+      where: { id: elementoId },
+      select: { codigoDwg: true, descripcion: true, largo: true, alto: true },
+    }),
+    prisma.actividad.findUnique({
+      where: { id: actividadId },
+      select: { nombre: true, unidadMedida: true },
+    }),
+  ])
   if (!elemento) throw new ErrorApi(404, 'El elemento constructivo no existe')
+  if (!actividad) throw new ErrorApi(404, 'La actividad no existe')
 
   const largo = Number(String(elemento.largo))
   const alto = Number(String(elemento.alto))
+  const unidad = normalizarUnidad(actividad.unidadMedida)
 
-  return { largo, alto, area: largo * alto, elemento }
+  const deducida = cantidadDelElemento(unidad, largo, alto)
+  const cantidad = deducida ?? cantidadCapturada ?? null
+
+  if (cantidad === null || !(cantidad > 0)) {
+    throw new ErrorApi(
+      422,
+      `${actividad.nombre} se mide en ${unidad}: escribe la cantidad total que hay que ejecutar en ${elemento.codigoDwg}`,
+    )
+  }
+
+  return { largo, alto, cantidad, unidad, modo: modoCantidad(unidad), elemento, actividad }
+}
+
+/**
+ * Una sola obra por elemento y actividad.
+ *
+ * Si se abrian dos, el area del muro se contaba dos veces en el panel: justo lo
+ * que el modelo de registros encadenados existe para evitar. El segundo dia de
+ * trabajo sobre ese muro no es una obra nueva sino un avance de la que ya hay.
+ */
+export async function validarObraUnica(
+  elementoId: number,
+  actividadId: number,
+  registroActualId?: number,
+) {
+  const existente = await prisma.registroEjecucion.findFirst({
+    where: {
+      elementoId,
+      actividadId,
+      registroOrigenId: null,
+      ...(registroActualId ? { id: { not: registroActualId } } : {}),
+    },
+    select: {
+      codigoRegistro: true,
+      elemento: { select: { codigoDwg: true } },
+      actividad: { select: { nombre: true } },
+    },
+  })
+  if (existente) {
+    throw new ErrorApi(
+      409,
+      `${existente.elemento.codigoDwg} ya tiene la obra ${existente.codigoRegistro} de ${existente.actividad.nombre}. Registra el trabajo como avance de esa obra.`,
+    )
+  }
+}
+
+/**
+ * Una sola tarea por elemento y actividad, y ninguna si ese trabajo ya tiene
+ * obra abierta sin tarea: el encargo acabaria abriendo una segunda obra sobre
+ * el mismo muro.
+ */
+export async function validarTareaUnica(
+  elementoId: number,
+  actividadId: number,
+  tareaActualId?: number,
+) {
+  const [otraTarea, obra] = await Promise.all([
+    prisma.tarea.findFirst({
+      where: {
+        elementoId,
+        actividadId,
+        ...(tareaActualId ? { id: { not: tareaActualId } } : {}),
+      },
+      select: { codigo: true },
+    }),
+    prisma.registroEjecucion.findFirst({
+      where: { elementoId, actividadId, registroOrigenId: null },
+      select: { codigoRegistro: true, tareaId: true },
+    }),
+  ])
+
+  if (otraTarea) {
+    throw new ErrorApi(
+      409,
+      `Ya existe la tarea ${otraTarea.codigo} para ese elemento y esa actividad. Editala en lugar de crear otra.`,
+    )
+  }
+  if (obra && (!tareaActualId || obra.tareaId !== tareaActualId)) {
+    throw new ErrorApi(
+      409,
+      `Ese trabajo ya tiene la obra ${obra.codigoRegistro} abierta: no hace falta encargarlo otra vez.`,
+    )
+  }
+}
+
+/**
+ * Un trabajador solo se asigna a una actividad cuando ya tiene precio acordado
+ * para ella.
+ *
+ * Antes la jornada se guardaba igual, sin importe, y el problema aparecia al
+ * liquidar: trabajo hecho que no se podia pagar. Ahora se frena al asignar la
+ * tarea o al registrar la jornada, que es cuando todavia se puede arreglar:
+ * se acuerda el precio en la ficha del trabajador y se vuelve a guardar.
+ *
+ * Responde con el codigo SIN_PRECIO para que la pantalla lo muestre en una
+ * ventana de error y no como un aviso mas.
+ */
+export async function exigirPrecioAcordado(
+  trabajadorId: number | null | undefined,
+  actividadId: number,
+) {
+  if (!trabajadorId) return
+
+  const [tarifa, trabajador, actividad] = await Promise.all([
+    prisma.trabajadorActividad.findUnique({
+      where: { trabajadorId_actividadId: { trabajadorId, actividadId } },
+      select: { id: true },
+    }),
+    prisma.trabajador.findUnique({
+      where: { id: trabajadorId },
+      select: { nombre: true, apellido: true },
+    }),
+    prisma.actividad.findUnique({ where: { id: actividadId }, select: { nombre: true } }),
+  ])
+
+  if (tarifa) return
+
+  const quien = trabajador ? `${trabajador.nombre} ${trabajador.apellido}` : 'El trabajador'
+  const que = actividad?.nombre ?? 'esta actividad'
+  throw new ErrorApi(
+    409,
+    `${quien} no tiene precio acordado para ${que}. Acuerda el precio en su ficha (Trabajadores) y vuelve a guardar.`,
+    'SIN_PRECIO',
+  )
 }

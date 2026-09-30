@@ -3,12 +3,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion, AreaTexto } from '@/components/ui/input'
-import { AvisoError, PieFormulario, useEnvio } from './base'
+import { AvisoError, Pasos, PiePasos, VentanaError, useEnvio } from './base'
 import { useRecurso, useRecursoUnico } from '@/lib/cliente'
 import { crearEtiquetas } from '@/lib/etiquetas'
 import { fechaParaInput, formatoNumero, hoyTexto } from '@/lib/utils'
-import { opcionesEstadoEjecucion } from '@/lib/dominio'
+import { opcionesEstadoEjecucion, cantidadDelElemento } from '@/lib/dominio'
 import type { Catalogos, Cuadrilla, Elemento, Tarea } from '@/types/dominio'
+
+/** Si el trabajador tiene precio acordado para esa actividad. */
+function tienePrecio(
+  trabajador: { tarifas?: Array<{ actividadId: number }> } | undefined | null,
+  actividadId: string | number | null | undefined,
+) {
+  if (!actividadId) return true
+  return (trabajador?.tarifas ?? []).some((t) => t.actividadId === Number(actividadId))
+}
 
 /**
  * Asignar una tarea: el trabajo que se encarga antes de ejecutarlo.
@@ -49,8 +58,24 @@ export function FormTarea({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const {
+    enviando,
+    errorGeneral,
+    errores,
+    guardar,
+    ventanaError,
+    mostrarVentanaError,
+    cerrarVentanaError,
+  } = useEnvio()
   const [form, setForm] = useState(vacio)
+
+  /**
+   * El formulario se llena en dos pasos: primero que trabajo y donde, y solo
+   * despues lo demas. Es lo que permite pedir la meta en la unidad correcta:
+   * hasta que no hay actividad elegida no se sabe si se mide en m2, en ml o en
+   * unidades.
+   */
+  const [paso, setPaso] = useState(1)
 
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
 
@@ -95,9 +120,18 @@ export function FormTarea({
   )
 
   const integrantes = (cuadrilla.dato?.integrantes ?? []).filter((i) => i.activo)
+  const trabajadorElegido = integrantes.find((i) => String(i.trabajadorId) === form.trabajadorId)
+  /** El trabajador elegido no tiene precio acordado para la actividad elegida. */
+  const faltaTarifa = Boolean(
+    form.trabajadorId &&
+      form.actividadId &&
+      trabajadorElegido &&
+      !tienePrecio(trabajadorElegido.trabajador, form.actividadId),
+  )
 
   useEffect(() => {
     if (!abierto) return
+    setPaso(1)
     if (!registro) {
       setForm(vacio)
       return
@@ -126,7 +160,21 @@ export function FormTarea({
   // donde se miden una sola vez. La tarea solo dice que hay que hacerlo.
   const elementoElegido = elementos.datos.find((f) => String(f.id) === form.elementoId)
 
-  const area = elementoElegido ? elementoElegido.largo * elementoElegido.alto : 0
+  /** La unidad en que se mide esta actividad: m2, ml, und... */
+  const unidad =
+    actividades.find((a) => String(a.id) === form.actividadId)?.unidadMedida ?? 'm2'
+
+  /** El primer paso esta completo cuando se sabe que se hace y sobre que. */
+  const listoPaso1 = Boolean(form.elementoId && form.actividadId)
+
+  /**
+   * Lo que hay que ejecutar, en la unidad de la actividad: m2 = largo x alto,
+   * ml = largo. En und, m3 o kg las medidas no lo dicen y queda nulo: se
+   * escribe al abrir la obra.
+   */
+  const cantidad = elementoElegido
+    ? cantidadDelElemento(unidad, elementoElegido.largo, elementoElegido.alto)
+    : null
 
   // La obra ya arranco: la ubicacion, la actividad y las medidas quedan fijas,
   // porque lo ejecutado se midio contra ellas.
@@ -134,6 +182,28 @@ export function FormTarea({
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
+    // Enter en un campo del paso 1 no guarda a medias: avanza.
+    if (paso < 2) {
+      if (listoPaso1) setPaso(2)
+      return
+    }
+    // Y si el envio lo disparo un boton que no es de guardar (el "Siguiente"),
+    // no se guarda: solo se cambio de paso.
+    const boton = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
+    if (boton && boton.type !== 'submit') return
+    // Sin precio acordado no se encarga. Al editar solo se exige si cambia el
+    // trabajador o la actividad, igual que en el servidor.
+    const cambiaQuienOQue =
+      !registro ||
+      form.trabajadorId !== String(registro.trabajadorId ?? '') ||
+      form.actividadId !== String(registro.actividadId)
+    if (cambiaQuienOQue && faltaTarifa) {
+      const actividad = catalogos?.actividades.find((a) => String(a.id) === form.actividadId)?.nombre
+      mostrarVentanaError(
+        `${trabajadorElegido?.trabajador?.nombre ?? 'El trabajador'} ${trabajadorElegido?.trabajador?.apellido ?? ''} no tiene precio acordado para ${actividad ?? 'esta actividad'}. Acuerda el precio en su ficha (Trabajadores) y vuelve a asignar la tarea.`,
+      )
+      return
+    }
     const { proyectoId, torreId, pisoId, zonaId, ...datos } = form
     void [proyectoId, torreId, pisoId, zonaId]
     guardar(
@@ -149,11 +219,14 @@ export function FormTarea({
       titulo={registro ? `Editar tarea ${registro.codigo}` : 'Asignar tarea'}
       descripcion="El trabajo que se encarga. El registro de obra hereda estos datos cuando se ejecuta."
       abierto={abierto}
-      onCerrar={onCerrar}
+      // Con la ventana de error abierta, Escape cierra solo esa ventana.
+      onCerrar={ventanaError ? cerrarVentanaError : onCerrar}
       ancho="lg"
     >
       <form onSubmit={enviarFormulario} className="space-y-4">
         <AvisoError mensaje={errorGeneral} />
+
+        <Pasos actual={paso} titulos={['Trabajo y ubicacion', 'Asignacion y meta']} />
 
         {obraIniciada && (
           <p className="rounded-lg border border-marca-200 bg-marca-50 px-3 py-2 text-xs text-marca-700">
@@ -162,7 +235,8 @@ export function FormTarea({
           </p>
         )}
 
-        {/* --- Que y donde -------------------------------------------------- */}
+        {/* --- Paso 1: que y donde ------------------------------------------ */}
+        {paso === 1 && (
         <section>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-obra-500">
             Trabajo y ubicacion
@@ -277,8 +351,11 @@ export function FormTarea({
             </Campo>
           </div>
         </section>
+        )}
 
-        {/* --- Cuanto ------------------------------------------------------- */}
+        {/* --- Paso 2: cuanto, a quien y para cuando ------------------------ */}
+        {paso === 2 && (
+        <>
         <section>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-obra-500">
             Cantidad por ejecutar
@@ -290,14 +367,20 @@ export function FormTarea({
               mal, se corrigen en la ficha del elemento.
             */}
             <div className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2">
-              <p className="text-xs text-obra-500">Area del elemento</p>
+              <p className="text-xs text-obra-500">Cantidad por ejecutar</p>
               {elementoElegido ? (
                 <>
                   <p className="text-lg font-semibold tabular-nums text-obra-900">
-                    {formatoNumero(area)}{' '}
-                    <span className="text-sm font-normal text-obra-500">
-                      {elementoElegido.unidad || 'm2'}
-                    </span>
+                    {cantidad === null ? (
+                      <span className="text-sm font-normal text-obra-500">
+                        En {unidad} se escribe al abrir la obra
+                      </span>
+                    ) : (
+                      <>
+                        {formatoNumero(cantidad)}{' '}
+                        <span className="text-sm font-normal text-obra-500">{unidad}</span>
+                      </>
+                    )}
                   </p>
                   <p className="text-xs tabular-nums text-obra-500">
                     {formatoNumero(elementoElegido.largo)} x {formatoNumero(elementoElegido.alto)} m
@@ -309,7 +392,7 @@ export function FormTarea({
               )}
             </div>
 
-            <Campo etiqueta="m2 meta por jornada" error={errores.m2Meta}>
+            <Campo etiqueta={`${unidad} meta por jornada`} error={errores.m2Meta}>
               <Entrada
                 type="number"
                 step="0.01"
@@ -350,12 +433,27 @@ export function FormTarea({
                 disabled={!form.cuadrillaId}
               >
                 <option value="">Sin asignar</option>
-                {integrantes.map((i) => (
-                  <option key={i.id} value={i.trabajadorId}>
-                    {i.trabajador?.apellido} {i.trabajador?.nombre}
-                  </option>
-                ))}
+                {integrantes.map((i) => {
+                  // Sin precio acordado para esta actividad no se puede elegir:
+                  // primero se acuerda en su ficha.
+                  const sinPrecio = Boolean(form.actividadId) && !tienePrecio(i.trabajador, form.actividadId)
+                  return (
+                    <option
+                      key={i.id}
+                      value={i.trabajadorId}
+                      disabled={sinPrecio && String(i.trabajadorId) !== form.trabajadorId}
+                    >
+                      {i.trabajador?.apellido} {i.trabajador?.nombre}
+                      {sinPrecio ? ' · sin precio acordado' : ''}
+                    </option>
+                  )
+                })}
               </Seleccion>
+              {faltaTarifa && (
+                <p className="mt-1 text-xs text-red-600">
+                  Sin precio acordado para esta actividad: acuerdalo primero en su ficha.
+                </p>
+              )}
             </Campo>
 
             <Campo etiqueta="Inicio previsto" error={errores.fechaInicioPlan}>
@@ -405,8 +503,20 @@ export function FormTarea({
           </div>
         </section>
 
-        <PieFormulario enviando={enviando} onCancelar={onCerrar} />
+        </>
+        )}
+
+        <PiePasos
+          paso={paso}
+          total={2}
+          enviando={enviando}
+          puedeSeguir={listoPaso1}
+          onCancelar={onCerrar}
+          onAtras={() => setPaso(1)}
+          onSiguiente={() => setPaso(2)}
+        />
       </form>
+      <VentanaError mensaje={ventanaError} onCerrar={cerrarVentanaError} />
     </Modal>
   )
 }

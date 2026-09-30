@@ -133,7 +133,26 @@ export function indicadoresJornada(registro: JornadaCalculable): IndicadoresJorn
 export interface ObraCalculable extends JornadaCalculable {
   largo?: unknown
   alto?: unknown
+  cantidadTotal?: unknown
   avances?: JornadaCalculable[]
+}
+
+/**
+ * Cuanto hay que ejecutar en una obra, en la unidad de su actividad.
+ *
+ * Es la cantidad_total que se copio al abrirla. Las obras anteriores a esa
+ * columna no la tienen hasta que se corre db:constraints, y mientras tanto
+ * valen lo que valian: largo x alto.
+ */
+export function cantidadDeObra(apertura: {
+  cantidadTotal?: unknown
+  largo?: unknown
+  alto?: unknown
+}): number {
+  if (apertura.cantidadTotal !== null && apertura.cantidadTotal !== undefined) {
+    return num(apertura.cantidadTotal)
+  }
+  return num(apertura.largo) * num(apertura.alto)
 }
 
 export interface IndicadoresObra {
@@ -150,7 +169,7 @@ export interface IndicadoresObra {
 }
 
 export function indicadoresObra(raiz: ObraCalculable): IndicadoresObra {
-  const m2Totales = num(raiz.largo) * num(raiz.alto)
+  const m2Totales = cantidadDeObra(raiz)
   const dias = [raiz as JornadaCalculable, ...(raiz.avances ?? [])]
 
   let m2Ejecutados = 0
@@ -189,7 +208,8 @@ export interface JornadaEncadenada extends JornadaCalculable {
   registroOrigenId: number | null
   largo?: unknown
   alto?: unknown
-  registroOrigen?: { largo?: unknown; alto?: unknown } | null
+  cantidadTotal?: unknown
+  registroOrigen?: { largo?: unknown; alto?: unknown; cantidadTotal?: unknown } | null
 }
 
 /** Identificador de la obra a la que pertenece una jornada. */
@@ -197,11 +217,9 @@ export function claveDeObra(registro: Pick<JornadaEncadenada, 'id' | 'registroOr
   return registro.registroOrigenId ?? registro.id
 }
 
-/** Area del elemento de la obra: la lleva el registro que la abrio. */
+/** Cantidad total de la obra: la lleva el registro que la abrio. */
 export function areaDeObra(registro: JornadaEncadenada) {
-  const origen = registro.registroOrigen
-  if (origen) return num(origen.largo) * num(origen.alto)
-  return num(registro.largo) * num(registro.alto)
+  return cantidadDeObra(registro.registroOrigen ?? registro)
 }
 
 export interface EstadoObras {

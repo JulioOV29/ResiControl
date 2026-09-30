@@ -20,6 +20,7 @@ export function usePuede() {
     gestionar: puede(rol, 'gestionar'),
     registrar: puede(rol, 'registrar'),
     administrar: puede(rol, 'administrar'),
+    liquidar: puede(rol, 'liquidar'),
     consultar: puede(rol, 'consultar'),
   }
 }

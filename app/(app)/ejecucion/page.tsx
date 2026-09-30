@@ -13,7 +13,12 @@ import {
   Target,
   X,
 } from 'lucide-react'
-import { useRecursoUnico, useEliminacion, useRetardo } from '@/lib/cliente'
+import {
+  useRecursoUnico,
+  useEliminacion,
+  useRefrescoAlVolver,
+  useRetardo,
+} from '@/lib/cliente'
 import { usePuede } from '@/lib/permisos'
 import { EncabezadoPagina, EstadoVacio } from '@/components/EncabezadoPagina'
 import { Tabla, type Columna } from '@/components/ui/tabla'
@@ -31,12 +36,13 @@ import { indicadoresJornada, formatoDuracion } from '@/lib/calculos'
 import {
   conciliar,
   expandirFilas,
+  idsConRegistros,
   opcionesDisponibles,
   type Dimension,
   type Seleccion as SeleccionFiltros,
 } from '@/lib/filtrosRelacionales'
 import { codigosDeRegistro, formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
-import { crearEtiquetas } from '@/lib/etiquetas'
+import { conBaja, crearEtiquetas } from '@/lib/etiquetas'
 import type { Catalogos, ListaRegistros, Registro } from '@/types/dominio'
 
 const filtrosVacios = {
@@ -95,14 +101,28 @@ export default function EjecucionPage() {
   // filtro. Antes se sumaba aqui a partir de las filas recibidas, que es lo
   // mismo solo mientras la lista quepa entera.
   const datos = useMemo(() => dato?.registros ?? [], [dato])
-  const resumen = dato?.resumen
+
+  /**
+   * Un resumen por unidad: m2, ml y und no se suman. Se muestra el de la unidad
+   * elegida, o el de la que mas jornadas tiene; si hay varias, unos botones
+   * permiten pasar de una a otra.
+   */
+  const [unidadResumen, setUnidadResumen] = useState('')
+  const resumenes = dato?.resumenes ?? []
+  const resumen = resumenes.find((r) => r.unidad === unidadResumen) ?? resumenes[0]
+  const uni = resumen?.unidad ?? 'm2'
 
   /**
    * Un solo viaje para los desplegables, con las combinaciones reales de los
    * registros: con ellas los filtros se condicionan entre si sin volver al
    * servidor, igual que en el panel.
    */
-  const { dato: catalogos } = useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
+  const { dato: catalogos, recargarEnSilencio: recargarCatalogos } =
+    useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
+
+  // Al volver a esta pestana se piden otra vez: lo que se haya dado de alta
+  // mientras tanto aparece en los filtros sin recargar la pagina.
+  useRefrescoAlVolver(recargarCatalogos)
 
   const filas = useMemo(
     () => (catalogos?.combinaciones ? expandirFilas(catalogos, catalogos.combinaciones) : []),
@@ -118,10 +138,21 @@ export default function EjecucionPage() {
   // lleva su codigo detras de un guion.
   const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
 
-  // Lo que no tiene registros desaparece de la lista, en vez de quedar en gris.
-  // Mientras los catalogos no hayan llegado no se descarta nada.
+  // Lo que existe pero no cuadra con los demas filtros desaparece de la lista,
+  // en vez de quedar en gris. Mientras los catalogos no hayan llegado no se
+  // descarta nada.
+  //
+  // La excepcion, igual que en el panel: lo que no aparece en ningun registro
+  // (una actividad o una cuadrilla recien creada) no se esconde. La regla
+  // relacional no tiene nada que decir de algo sin jornadas detras.
+  const conRegistros = useMemo(() => idsConRegistros(filas), [filas])
+
   const soloDisponibles = <T extends { id: number }>(dimension: Dimension, lista: T[]) =>
-    filas.length === 0 ? lista : lista.filter((x) => disponibles[dimension].has(x.id))
+    filas.length === 0
+      ? lista
+      : lista.filter(
+          (x) => disponibles[dimension].has(x.id) || !conRegistros[dimension].has(x.id),
+        )
 
   const proyectos = soloDisponibles('proyectoId', catalogos?.proyectos ?? [])
   const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? [])
@@ -267,9 +298,9 @@ export default function EjecucionPage() {
     },
     {
       clave: 'ejecutado',
-      titulo: 'm2 ejec.',
+      titulo: 'Ejecutado',
       alineacion: 'derecha',
-      render: (r) => formatoNumero(r.m2Ejecutados),
+      render: (r) => `${formatoNumero(r.m2Ejecutados)} ${r.actividad?.unidadMedida ?? 'm2'}`,
     },
     {
       clave: 'rendimiento',
@@ -277,7 +308,9 @@ export default function EjecucionPage() {
       alineacion: 'derecha',
       render: (r) => {
         const i = indicadoresJornada(r)
-        return i.rendimiento === null ? '-' : `${formatoNumero(i.rendimiento)} m2/h`
+        return i.rendimiento === null
+          ? '-'
+          : `${formatoNumero(i.rendimiento)} ${r.actividad?.unidadMedida ?? 'm2'}/h`
       },
     },
     {
@@ -375,7 +408,7 @@ export default function EjecucionPage() {
             <option value="">Todas las actividades</option>
             {actividades.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.nombre}
+                {conBaja(a.nombre, a.activo)}
               </option>
             ))}
           </Seleccion>
@@ -387,7 +420,7 @@ export default function EjecucionPage() {
             <option value="">Todas las cuadrillas</option>
             {cuadrillas.map((c) => (
               <option key={c.id} value={c.id}>
-                {etiquetas.cuadrilla(c)}
+                {conBaja(etiquetas.cuadrilla(c), c.activo)}
               </option>
             ))}
           </Seleccion>
@@ -420,37 +453,56 @@ export default function EjecucionPage() {
 
       {resumen && resumen.registros > 0 && (
         <>
+          {resumenes.length > 1 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-obra-500">
+              <span>Indicadores en</span>
+              {resumenes.map((r) => (
+                <button
+                  key={r.unidad}
+                  onClick={() => setUnidadResumen(r.unidad)}
+                  className={
+                    r.unidad === uni
+                      ? 'rounded-full bg-obra-900 px-3 py-1 font-medium text-white'
+                      : 'rounded-full border border-obra-200 px-3 py-1 text-obra-600 hover:bg-obra-50'
+                  }
+                >
+                  {r.unidad} · {r.registros} jornada{r.registros === 1 ? '' : 's'}
+                </button>
+              ))}
+              <span className="text-obra-400">m2, ml y und no se suman entre si.</span>
+            </div>
+          )}
           {/* Las mismas tarjetas del panel: un solo componente, un solo aspecto. */}
           <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-7">
             <Indicador
               etiqueta="Produccion"
               valor={formatoNumero(resumen.m2Ejecutados)}
-              unidad="m2"
+              unidad={uni}
               icono={Ruler}
               acento
             />
             <Indicador
               etiqueta="Pendiente"
               valor={formatoNumero(resumen.m2Pendientes)}
-              unidad="m2"
+              unidad={uni}
               icono={Target}
             />
             <Indicador
               etiqueta="Avance"
               valor={formatoPorcentaje(resumen.avance)}
-              detalle={`acumulado sobre ${formatoNumero(resumen.m2Totales)} m2`}
+              detalle={`acumulado sobre ${formatoNumero(resumen.m2Totales)} ${uni}`}
               icono={Percent}
             />
             <Indicador
               etiqueta="Cumplimiento"
               valor={formatoPorcentaje(resumen.cumplimiento)}
-              detalle={`meta ${formatoNumero(resumen.m2Meta)} m2`}
+              detalle={`meta ${formatoNumero(resumen.m2Meta)} ${uni}`}
               icono={Activity}
             />
             <Indicador
               etiqueta="Rendimiento"
               valor={resumen.rendimiento === null ? '-' : formatoNumero(resumen.rendimiento)}
-              unidad="m2/h"
+              unidad={`${uni}/h`}
               icono={Gauge}
             />
             <Indicador
@@ -471,7 +523,11 @@ export default function EjecucionPage() {
           {dato?.truncado && (
             <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               La tabla muestra los {formatoNumero(datos.length, 0)} registros mas recientes de los{' '}
-              {formatoNumero(resumen.registros, 0)} que cumplen el filtro. Los indicadores de
+              {formatoNumero(
+                resumenes.reduce((suma, r) => suma + r.registros, 0),
+                0,
+              )}{' '}
+              que cumplen el filtro. Los indicadores de
               arriba si estan calculados sobre todos. Afina las fechas para ver el resto.
             </p>
           )}

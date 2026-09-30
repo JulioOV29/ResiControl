@@ -14,6 +14,10 @@
  * opciones se ofrecen. Si entraran, estrechar el rango podria dejar sin
  * disponibles a los filtros ya elegidos y borrarlos sin que el residente lo
  * pidiera.
+ *
+ * Lo que NUNCA se esconde es lo que no aparece en ningun registro: una actividad
+ * o una cuadrilla recien dada de alta no esta en ninguna combinacion, asi que la
+ * regla de arriba no tiene nada que decir de ella. Ver idsConRegistros.
  */
 import type { Catalogos } from "@/types/dominio";
 
@@ -95,6 +99,32 @@ export function expandirFilas(
   return filas;
 }
 
+/**
+ * Los identificadores que aparecen en ALGUN registro, dimension por dimension,
+ * sin mirar los filtros.
+ *
+ * Distingue dos cosas que se parecen y no son lo mismo:
+ *
+ * - Una opcion que tiene trabajo, pero no con los filtros puestos. Esa se
+ *   esconde: es justo para lo que estan los filtros relacionales.
+ * - Una opcion que no tiene trabajo en ninguna parte, como una actividad que se
+ *   acaba de crear. De esa no hay nada que deducir, y esconderla la hacia
+ *   desaparecer el mismo dia en que se da de alta, que es cuando se busca. Se
+ *   ofrece siempre.
+ */
+export function idsConRegistros(filas: Fila[]): Record<Dimension, Set<number>> {
+  const resultado = {} as Record<Dimension, Set<number>>;
+  for (const dimension of DIMENSIONES) {
+    const ids = new Set<number>();
+    for (const fila of filas) {
+      const valor = fila[dimension];
+      if (valor !== null) ids.add(valor);
+    }
+    resultado[dimension] = ids;
+  }
+  return resultado;
+}
+
 /** Los filtros puestos, con su valor ya convertido a numero. */
 function puestos(seleccion: Seleccion): Array<[Dimension, number]> {
   const lista: Array<[Dimension, number]> = [];
@@ -165,5 +195,11 @@ export function conciliar<T extends Seleccion>(
       resultado[dimension] = "" as T[Dimension];
     }
   }
-  return resultado;
+
+  // Si soltando filtros no se llega a ninguna combinacion, no se suelta nada.
+  // Pasa al elegir algo que todavia no tiene ningun registro: por mucho que se
+  // vacien el proyecto y la torre nunca va a haber una combinacion que lo
+  // contenga, y borrarlos solo le quita al residente lo que si habia elegido.
+  // Mejor un panel en cero con los filtros intactos.
+  return hayRegistro() ? resultado : seleccion;
 }

@@ -5,7 +5,13 @@
  * un error crudo del motor.
  */
 import { z } from 'zod'
-import { ESTADOS_EJECUCION, ESTADOS_PROYECTO, ROLES } from '@/lib/dominio'
+import {
+  ESTADOS_EJECUCION,
+  ESTADOS_PROYECTO,
+  PERIODOS_LIQUIDACION,
+  ROLES,
+  TIPOS_CUENTA,
+} from '@/lib/dominio'
 
 // --- Piezas reutilizables ---------------------------------------------------
 
@@ -322,6 +328,12 @@ export const esquemaRegistroObra = z
       .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
     elementoId: z.coerce.number().int().positive('Selecciona un elemento constructivo'),
     actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
+    /**
+     * Cantidad total de la obra. Solo cuenta cuando la actividad se mide en una
+     * unidad que no sale de las medidas del elemento (und, m3, kg); en m2 y ml
+     * el servidor la calcula y lo que llegue aqui se ignora.
+     */
+    cantidadTotal: decimalOpcional('La cantidad total').transform((v) => (v && v > 0 ? v : null)),
     // Las medidas no viajan desde el navegador: el servidor las copia del
     // elemento constructivo, que es donde se miden. Que lo ejecutado no pase
     // del area se comprueba alli mismo, por la misma razon.
@@ -345,3 +357,39 @@ export const esquemaRegistroAvance = z
   })
   .refine((d) => d.horaFinal > d.horaInicio, mensajeHoraFinal)
   .refine(recesoCabe, mensajeReceso)
+
+// --- Liquidaciones ----------------------------------------------------------
+
+/**
+ * Lo que se pide para liquidar. Lo que se paga no viaja desde el navegador: el
+ * servidor lo vuelve a calcular con las jornadas y sus tarifas congeladas.
+ */
+export const esquemaLiquidacion = z
+  .object({
+    trabajadorId: z.coerce.number().int().positive('Selecciona un trabajador'),
+    tipoPeriodo: z.enum(PERIODOS_LIQUIDACION),
+    desde: fecha('La fecha desde'),
+    hasta: fecha('La fecha hasta'),
+    banco: textoOpcional(80),
+    tipoCuenta: z
+      .union([z.enum(TIPOS_CUENTA), z.literal(''), z.null()])
+      .optional()
+      .transform((v) => (v ? v : null)),
+    numeroCuenta: z
+      .string()
+      .trim()
+      .min(4, 'El numero de cuenta es obligatorio')
+      .max(40, 'El numero de cuenta no puede pasar de 40 caracteres')
+      .regex(/^[0-9][0-9 -]*[0-9]$/, 'El numero de cuenta solo lleva digitos, espacios o guiones'),
+    observaciones: textoOpcional(2000),
+    /**
+     * El total que el residente vio en el aviso. Si al guardar da otro (alguien
+     * registro o pago jornadas entretanto), no se guarda: se paga lo que se
+     * confirmo o nada.
+     */
+    totalEsperado: z.coerce.number().nonnegative().optional(),
+  })
+  .refine((d) => d.hasta >= d.desde, {
+    message: 'La fecha hasta no puede ser anterior a la fecha desde',
+    path: ['hasta'],
+  })

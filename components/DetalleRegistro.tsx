@@ -5,7 +5,7 @@ import { Modal } from '@/components/ui/modal'
 import { Insignia } from '@/components/ui/badge'
 import { useRecursoUnico } from '@/lib/cliente'
 import { codigosDeRegistro, formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
-import { dateAHora, formatoDuracion, indicadoresJornada } from '@/lib/calculos'
+import { cantidadDeObra, dateAHora, formatoDuracion, indicadoresJornada } from '@/lib/calculos'
 import type { Registro } from '@/types/dominio'
 
 function Dato({ etiqueta, valor }: { etiqueta: string; valor: React.ReactNode }) {
@@ -37,6 +37,8 @@ export function DetalleRegistro({
   const i = dato ? indicadoresJornada(dato) : null
   const codigos = dato ? codigosDeRegistro(dato) : null
   const esApertura = codigos?.esApertura ?? false
+  /** La unidad de la actividad: m2, ml, und... */
+  const uni = dato?.actividad?.unidadMedida ?? 'm2'
 
   return (
     <Modal
@@ -101,24 +103,34 @@ export function DetalleRegistro({
               valor={`${dateAHora(dato.horaInicio)} a ${dateAHora(dato.horaFinal)}, receso ${dato.tiempoRecesoMin} min`}
             />
             <Dato etiqueta="Tiempo efectivo" valor={formatoDuracion(i.minutosEfectivos)} />
-            <Dato etiqueta="m2 ejecutados" valor={`${formatoNumero(dato.m2Ejecutados)} m2`} />
+            <Dato etiqueta={`${uni} ejecutados`} valor={`${formatoNumero(dato.m2Ejecutados)} ${uni}`} />
             <Dato
-              etiqueta="m2 meta del dia"
-              valor={dato.m2Meta === null ? '-' : `${formatoNumero(dato.m2Meta)} m2`}
+              etiqueta={`${uni} meta del dia`}
+              valor={dato.m2Meta === null ? '-' : `${formatoNumero(dato.m2Meta)} ${uni}`}
             />
             <Dato
               etiqueta="Rendimiento"
-              valor={i.rendimiento === null ? '-' : `${formatoNumero(i.rendimiento)} m2/h`}
+              valor={i.rendimiento === null ? '-' : `${formatoNumero(i.rendimiento)} ${uni}/h`}
             />
             <Dato etiqueta="Cumplimiento" valor={formatoPorcentaje(i.cumplimiento)} />
             {esApertura && (
               <Dato
-                etiqueta="Medidas del elemento"
-                valor={`${formatoNumero(dato.largo)} x ${formatoNumero(dato.alto)} = ${formatoNumero(
-                  (dato.largo ?? 0) * (dato.alto ?? 0),
-                )} m2`}
+                etiqueta="Medidas y cantidad de la obra"
+                valor={`${formatoNumero(dato.largo)} x ${formatoNumero(dato.alto)} m · ${formatoNumero(
+                  cantidadDeObra(dato),
+                )} ${uni} por ejecutar`}
               />
             )}
+            <Dato
+              etiqueta="Pago"
+              valor={
+                dato.liquidacion
+                  ? `Pagada en la liquidacion ${dato.liquidacion.codigo}`
+                  : dato.valorM2 === null
+                    ? 'Sin precio acordado'
+                    : 'Pendiente de liquidar'
+              }
+            />
             <Dato
               etiqueta="Registrado por"
               valor={

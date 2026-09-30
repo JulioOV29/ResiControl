@@ -17,6 +17,7 @@ import {
   Target,
   UserCog,
   Users,
+  Wallet,
   Wrench,
   X,
 } from 'lucide-react'
@@ -40,6 +41,12 @@ const navegacion: GrupoNav[] = [
       { href: '/dashboard', etiqueta: 'Panel', icono: LayoutDashboard },
       { href: '/tareas', etiqueta: 'Asignar tareas', icono: ClipboardCheck },
       { href: '/ejecucion', etiqueta: 'Registros de obra', icono: ClipboardList },
+      {
+        href: '/liquidaciones',
+        etiqueta: 'Liquidaciones',
+        icono: Wallet,
+        roles: ['ADMIN', 'RESIDENTE'],
+      },
       { href: '/informes', etiqueta: 'Informes', icono: FileBarChart },
     ],
   },

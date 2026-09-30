@@ -10,6 +10,11 @@ export class ErrorApi extends Error {
   constructor(
     public estado: number,
     mensaje: string,
+    /**
+     * Codigo corto para que la pantalla sepa que tipo de rechazo es y lo
+     * muestre como debe (por ejemplo, SIN_PRECIO abre una ventana de error).
+     */
+    public codigo?: string,
   ) {
     super(mensaje)
     this.name = 'ErrorApi'
@@ -40,14 +45,14 @@ export function ok(datos: unknown, estado = 200) {
   return NextResponse.json(serializar(datos), { status: estado })
 }
 
-export function fallo(mensaje: string, estado = 400, detalle?: unknown) {
-  return NextResponse.json({ error: mensaje, detalle }, { status: estado })
+export function fallo(mensaje: string, estado = 400, detalle?: unknown, codigo?: string) {
+  return NextResponse.json({ error: mensaje, detalle, codigo }, { status: estado })
 }
 
 /** Traduce cualquier excepcion a una respuesta HTTP consistente. */
 export function manejarError(error: unknown) {
   if (error instanceof ErrorApi) {
-    return fallo(error.message, error.estado)
+    return fallo(error.message, error.estado, undefined, error.codigo)
   }
 
   if (error instanceof ZodError) {
@@ -60,7 +65,11 @@ export function manejarError(error: unknown) {
 
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === 'P2002') {
-      const campos = (error.meta?.target as string[] | undefined)?.join(', ')
+      const objetivo = error.meta?.target
+      if (String(objetivo ?? '').includes('elemento_actividad') || /elemento_actividad/.test(error.message)) {
+        return fallo('Ese elemento ya tiene ese trabajo registrado con esa actividad', 409)
+      }
+      const campos = Array.isArray(objetivo) ? objetivo.join(', ') : undefined
       return fallo(
         campos ? `Ya existe un registro con ese valor en: ${campos}` : 'El registro ya existe',
         409,
@@ -74,6 +83,31 @@ export function manejarError(error: unknown) {
     }
     if (error.code === 'P2014') {
       return fallo('No se puede eliminar: tiene informacion asociada', 409)
+    }
+  }
+
+  /**
+   * Lo que la base rechaza por sus propias reglas y Prisma no clasifica: borrar
+   * algo de lo que dependen otros datos (llave foranea con RESTRICT, codigo
+   * 23001 o 23503) o romper un CHECK (23514). Antes salian como "Error interno
+   * del servidor"; son conflictos con los datos y se dicen como tales.
+   */
+  if (
+    error instanceof Prisma.PrismaClientUnknownRequestError ||
+    error instanceof Prisma.PrismaClientKnownRequestError
+  ) {
+    const texto = error.message
+    if (/2300[13]|foreign key constraint/i.test(texto)) {
+      return fallo(
+        'No se puede eliminar: hay registros, tareas u otros datos que dependen de esto',
+        409,
+      )
+    }
+    if (/23514|check constraint/i.test(texto)) {
+      return fallo('Los datos no cumplen una de las reglas de la base de datos', 409)
+    }
+    if (/23505|elemento_actividad/i.test(texto)) {
+      return fallo('Ese elemento ya tiene ese trabajo registrado con esa actividad', 409)
     }
   }
 

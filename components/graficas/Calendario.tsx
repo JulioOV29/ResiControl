@@ -54,8 +54,11 @@ export function CalendarioRegistros({
   dias,
   seleccionada,
   onSeleccionar,
+  unidad = 'm2',
 }: {
   dias: Dia[]
+  /** La unidad en que mide el panel: m2, ml, und... */
+  unidad?: string
   /** El dia abierto en el informe de al lado. */
   seleccionada: string | null
   onSeleccionar: (fecha: string) => void
@@ -192,13 +195,13 @@ export function CalendarioRegistros({
               <div className="flex justify-between gap-2">
                 <dt>Ejecutado</dt>
                 <dd className="tabular-nums text-obra-900">
-                  {formatoNumero(encima.dato.m2Ejecutados)} m2
+                  {formatoNumero(encima.dato.m2Ejecutados)} {unidad}
                 </dd>
               </div>
               <div className="flex justify-between gap-2">
                 <dt>Meta</dt>
                 <dd className="tabular-nums">
-                  {encima.dato.m2Meta > 0 ? `${formatoNumero(encima.dato.m2Meta)} m2` : 'sin meta'}
+                  {encima.dato.m2Meta > 0 ? `${formatoNumero(encima.dato.m2Meta)} ${unidad}` : 'sin meta'}
                 </dd>
               </div>
               <div className="flex justify-between gap-2">
@@ -217,7 +220,7 @@ export function CalendarioRegistros({
       {/* Resumen del mes y leyenda */}
       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-obra-500">
         <span className="tabular-nums">
-          {delMes.length} de {totalDias} dias · {formatoNumero(m2DelMes)} m2
+          {delMes.length} de {totalDias} dias · {formatoNumero(m2DelMes)} {unidad}
         </span>
         <span className="flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded bg-marca-600" />

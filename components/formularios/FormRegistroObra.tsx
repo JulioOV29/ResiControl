@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion, AreaTexto } from '@/components/ui/input'
-import { AvisoError, PieFormulario, useEnvio } from './base'
+import { AvisoError, Pasos, PiePasos, VentanaError, useEnvio } from './base'
 import { pedir, useRecurso, useRecursoUnico } from '@/lib/cliente'
 import {
   fechaParaInput,
@@ -14,10 +14,20 @@ import {
 } from '@/lib/utils'
 import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib/calculos'
 import { crearEtiquetas } from '@/lib/etiquetas'
+import { cantidadDelElemento, modoCantidad } from '@/lib/dominio'
 import type { Catalogos, Cuadrilla, Elemento, Meta, Registro, Tarea } from '@/types/dominio'
 
 // La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
 const hoy = hoyTexto
+
+/** Si el trabajador tiene precio acordado para esa actividad. */
+function tienePrecio(
+  trabajador: { tarifas?: Array<{ actividadId: number }> } | undefined | null,
+  actividadId: string | number | null | undefined,
+) {
+  if (!actividadId) return true
+  return (trabajador?.tarifas ?? []).some((t) => t.actividadId === Number(actividadId))
+}
 
 const vacio = {
   fechaEjecucion: hoy(),
@@ -32,6 +42,8 @@ const vacio = {
   cuadrillaId: '',
   trabajadorId: '',
   m2Ejecutados: '',
+  /** Solo se escribe cuando la unidad no sale del elemento (und, m3, kg). */
+  cantidadTotal: '',
   horaInicio: '07:00',
   horaFinal: '17:00',
   tiempoRecesoMin: '60',
@@ -54,9 +66,23 @@ export function FormRegistroObra({
   onCerrar: () => void
   onGuardado: (creado: Registro) => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const {
+    enviando,
+    errorGeneral,
+    errores,
+    guardar,
+    ventanaError,
+    mostrarVentanaError,
+    cerrarVentanaError,
+  } = useEnvio()
   const [form, setForm] = useState(vacio)
   const [metaTocada, setMetaTocada] = useState(false)
+  /**
+   * El formulario se llena en dos pasos: primero QUE se hace y DONDE, despues
+   * el resto. La unidad del trabajo sale de la actividad, asi que no se puede
+   * pedir "m2 ejecutados" antes de saber si eso se mide en m2.
+   */
+  const [paso, setPaso] = useState(1)
 
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
 
@@ -90,6 +116,19 @@ export function FormRegistroObra({
 
   // Un registro nuevo solo puede usar catalogo vigente.
   const actividades = (catalogos?.actividades ?? []).filter((a) => a.activo)
+
+  /**
+   * La unidad en la que se mide esta actividad: m2, m3, ml, kg o und. Al editar
+   * una jornada vieja puede venir de una actividad ya retirada del catalogo, por
+   * eso el segundo intento sale del propio registro.
+   */
+  const unidad =
+    actividades.find((a) => String(a.id) === form.actividadId)?.unidadMedida ??
+    registro?.actividad?.unidadMedida ??
+    'm2'
+
+  /** Hasta que no se sepa que, donde y cuando, el paso 2 no tiene sentido. */
+  const listoPaso1 = Boolean(form.fechaEjecucion && form.elementoId && form.actividadId)
 
   const torres = useMemo(
     () =>
@@ -190,9 +229,22 @@ export function FormRegistroObra({
     alto: elementoElegido?.alto ?? (registro?.alto || 0),
   }
 
+  /**
+   * Cuanto hay que ejecutar en esta obra, en la unidad de su actividad: en m2
+   * es largo x alto, en ml es el largo, y en und, m3 o kg lo escribe el
+   * residente, porque las medidas del muro no dicen cuantas piezas lleva. El
+   * servidor aplica la misma regla y es el que manda.
+   */
+  const modo = modoCantidad(unidad)
+  const cantidadObra =
+    modo === 'captura'
+      ? Number(form.cantidadTotal) || 0
+      : (cantidadDelElemento(unidad, medidasElemento.largo, medidasElemento.alto) ?? 0)
+
   useEffect(() => {
     if (!abierto) return
     setMetaTocada(false)
+    setPaso(1)
 
     if (!registro) {
       setForm(vacio)
@@ -212,6 +264,7 @@ export function FormRegistroObra({
       cuadrillaId: String(registro.cuadrillaId),
       trabajadorId: registro.trabajadorId ? String(registro.trabajadorId) : '',
       m2Ejecutados: String(registro.m2Ejecutados),
+      cantidadTotal: registro.cantidadTotal === null ? '' : String(registro.cantidadTotal),
       horaInicio: dateAHora(registro.horaInicio),
       horaFinal: dateAHora(registro.horaFinal),
       tiempoRecesoMin: String(registro.tiempoRecesoMin),
@@ -256,9 +309,8 @@ export function FormRegistroObra({
       tiempoRecesoMin: Number(form.tiempoRecesoMin) || 0,
     })
 
-    // El area es la del elemento constructivo: alli se mide una sola vez y de
-    // alli la copia el servidor al guardar la jornada.
-    const area = medidasElemento.largo * medidasElemento.alto
+    // La cantidad de la obra, en su unidad: la calcula cantidadObra, arriba.
+    const area = cantidadObra
     const hecho = Number(form.m2Ejecutados) || 0
 
     return {
@@ -269,10 +321,32 @@ export function FormRegistroObra({
       completa: area > 0 && hecho >= area - 0.005,
       excedido: area > 0 && hecho > area + 0.005,
     }
-  }, [form])
+  }, [form, cantidadObra])
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
+    // Enter en un campo del paso 1 no guarda a medias: avanza.
+    if (paso < 2) {
+      if (listoPaso1) setPaso(2)
+      return
+    }
+    // Y si el envio lo disparo un boton que no es de guardar (el "Siguiente"),
+    // no se guarda: solo se cambio de paso.
+    const boton = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
+    if (boton && boton.type !== 'submit') return
+    // Sin precio acordado no se guarda. Al editar solo se exige si cambia el
+    // trabajador o la actividad, igual que en el servidor.
+    const cambiaQuienOQue =
+      !registro ||
+      form.trabajadorId !== String(registro.trabajadorId ?? '') ||
+      form.actividadId !== String(registro.actividadId)
+    if (cambiaQuienOQue && faltaTarifa) {
+      const actividad = actividades.find((a) => String(a.id) === form.actividadId)?.nombre
+      mostrarVentanaError(
+        `${trabajadorElegido?.trabajador?.nombre ?? 'El trabajador'} ${trabajadorElegido?.trabajador?.apellido ?? ''} no tiene precio acordado para ${actividad ?? 'esta actividad'}. Acuerda el precio en su ficha (Trabajadores) y vuelve a guardar.`,
+      )
+      return
+    }
     const { proyectoId, torreId, pisoId, zonaId, ...datos } = form
     void [proyectoId, torreId, pisoId, zonaId]
     guardar(
@@ -288,12 +362,18 @@ export function FormRegistroObra({
       titulo={registro ? `Editar registro ${registro.codigoRegistro}` : 'Nuevo registro de obra'}
       descripcion="El primer dia de trabajo sobre un elemento. Aqui van sus medidas."
       abierto={abierto}
-      onCerrar={onCerrar}
+      // Con la ventana de error abierta, Escape cierra solo esa ventana.
+      onCerrar={ventanaError ? cerrarVentanaError : onCerrar}
       ancho="xl"
     >
       <form onSubmit={enviarFormulario} className="space-y-5">
         <AvisoError mensaje={errorGeneral} />
 
+        <Pasos actual={paso} titulos={['Trabajo y ubicacion', 'Personal y jornada']} />
+
+        {/* --- Paso 1: que se hace, donde y en que fecha ------------------- */}
+        {paso === 1 && (
+        <>
         {/* --- La tarea que se va a ejecutar ------------------------------- */}
         {!registro && (
           <section>
@@ -332,7 +412,7 @@ export function FormRegistroObra({
 
         <section>
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
-            Ubicacion
+            Trabajo y ubicacion
           </h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <Campo etiqueta="Fecha de ejecucion" error={errores.fechaEjecucion} requerido>
@@ -434,14 +514,8 @@ export function FormRegistroObra({
                 ))}
               </Seleccion>
             </Campo>
-          </div>
-        </section>
 
-        <section>
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
-            Actividad y personal
-          </h3>
-          <div className="grid gap-4 sm:grid-cols-3">
+            {/* La actividad manda: de ella sale la unidad del paso 2. */}
             <Campo etiqueta="Actividad" error={errores.actividadId} requerido>
               <Seleccion
                 value={form.actividadId}
@@ -456,7 +530,19 @@ export function FormRegistroObra({
                 ))}
               </Seleccion>
             </Campo>
+          </div>
+        </section>
+        </>
+        )}
 
+        {/* --- Paso 2: con quien, cuanto y en cuanto tiempo ---------------- */}
+        {paso === 2 && (
+        <>
+        <section>
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
+            Personal
+          </h3>
+          <div className="grid gap-4 sm:grid-cols-2">
             <Campo etiqueta="Cuadrilla" error={errores.cuadrillaId} requerido>
               <Seleccion
                 value={form.cuadrillaId}
@@ -480,11 +566,21 @@ export function FormRegistroObra({
                 disabled={!form.cuadrillaId}
               >
                 <option value="">Sin asignar</option>
-                {integrantes.map((i) => (
-                  <option key={i.id} value={i.trabajadorId}>
-                    {i.trabajador?.apellido} {i.trabajador?.nombre}
-                  </option>
-                ))}
+                {integrantes.map((i) => {
+                  // Sin precio acordado para esta actividad no se puede elegir:
+                  // primero se acuerda en su ficha.
+                  const sinPrecio = Boolean(form.actividadId) && !tienePrecio(i.trabajador, form.actividadId)
+                  return (
+                    <option
+                      key={i.id}
+                      value={i.trabajadorId}
+                      disabled={sinPrecio && String(i.trabajadorId) !== form.trabajadorId}
+                    >
+                      {i.trabajador?.apellido} {i.trabajador?.nombre}
+                      {sinPrecio ? ' · sin precio acordado' : ''}
+                    </option>
+                  )
+                })}
               </Seleccion>
             </Campo>
           </div>
@@ -497,10 +593,10 @@ export function FormRegistroObra({
           )}
 
           {faltaTarifa && (
-            <p className="mt-2 rounded-lg border border-acento-200 bg-acento-50 px-3 py-2 text-xs text-acento-800">
+            <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
               {trabajadorElegido?.trabajador?.nombre ?? 'Este trabajador'} no tiene precio
-              acordado para esta actividad, asi que la jornada se guardara sin importe. Se
-              arregla en su ficha, en la seccion Trabajadores.
+              acordado para esta actividad: no se puede asignar. Acuerdalo primero en su
+              ficha, en la seccion Trabajadores.
             </p>
           )}
         </section>
@@ -521,20 +617,42 @@ export function FormRegistroObra({
               {medidasElemento.largo > 0 ? (
                 <>
                   <p className="text-base font-semibold tabular-nums text-obra-900">
-                    {formatoNumero(medidasElemento.largo)} x {formatoNumero(medidasElemento.alto)} m{' '}
-                    <span className="text-sm font-normal text-obra-500">
-                      = {formatoNumero(medidasElemento.largo * medidasElemento.alto)} m2
-                    </span>
+                    {formatoNumero(medidasElemento.largo)} x {formatoNumero(medidasElemento.alto)} m
+                    {modo !== 'captura' && (
+                      <span className="text-sm font-normal text-obra-500">
+                        {' '}
+                        → {formatoNumero(cantidadObra)} {unidad}
+                        {modo === 'largo' ? ' (el largo)' : ''}
+                      </span>
+                    )}
                   </p>
                   <p className="text-xs text-obra-400">
-                    Se miden en la ficha del elemento constructivo.
+                    {modo === 'captura'
+                      ? `En ${unidad} la cantidad no sale de las medidas: escribela al lado.`
+                      : 'Se miden en la ficha del elemento constructivo.'}
                   </p>
                 </>
               ) : (
                 <p className="text-sm text-obra-400">Elige el elemento constructivo</p>
               )}
             </div>
-            <Campo etiqueta="m2 ejecutados hoy" error={errores.m2Ejecutados} requerido>
+            {modo === 'captura' && (
+              <Campo
+                etiqueta={`${unidad} totales de la obra`}
+                error={errores.cantidadTotal}
+                requerido
+              >
+                <Entrada
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={form.cantidadTotal}
+                  onChange={(e) => cambiar({ cantidadTotal: e.target.value })}
+                  required
+                />
+              </Campo>
+            )}
+            <Campo etiqueta={`${unidad} ejecutados hoy`} error={errores.m2Ejecutados} requerido>
               <Entrada
                 type="number"
                 step="0.01"
@@ -544,7 +662,7 @@ export function FormRegistroObra({
                 required
               />
             </Campo>
-            <Campo etiqueta="m2 meta del dia" error={errores.m2Meta}>
+            <Campo etiqueta={`${unidad} meta del dia`} error={errores.m2Meta}>
               <Entrada
                 type="number"
                 step="0.01"
@@ -588,7 +706,8 @@ export function FormRegistroObra({
 
           {vista?.excedido && (
             <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              Lo ejecutado no puede superar los {formatoNumero(vista.area)} m2 del elemento.
+              Lo ejecutado no puede superar los {formatoNumero(vista.area)} {unidad} de
+              la obra.
             </p>
           )}
         </section>
@@ -600,14 +719,14 @@ export function FormRegistroObra({
             </h3>
             <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
               {[
-                ['m2 del elemento', formatoNumero(vista.area)],
-                ['m2 pendientes', formatoNumero(vista.pendiente)],
+                [`${unidad} de la obra`, formatoNumero(vista.area)],
+                [`${unidad} pendientes`, formatoNumero(vista.pendiente)],
                 ['Tiempo efectivo', formatoDuracion(vista.jornada.minutosEfectivos)],
                 [
                   'Rendimiento',
                   vista.jornada.rendimiento === null
                     ? '-'
-                    : `${formatoNumero(vista.jornada.rendimiento)} m2/h`,
+                    : `${formatoNumero(vista.jornada.rendimiento)} ${unidad}/h`,
                 ],
                 ['Cumplimiento', formatoPorcentaje(vista.jornada.cumplimiento)],
               ].map(([etiqueta, valor]) => (
@@ -639,7 +758,7 @@ export function FormRegistroObra({
                 <p className="mt-2 text-xs text-acento-800">
                   {vista.completa
                     ? 'La obra queda terminada con este solo registro.'
-                    : `Quedarian ${formatoNumero(vista.pendiente)} m2, que se cargan despues como registros de avance.`}
+                    : `Quedarian ${formatoNumero(vista.pendiente)} ${unidad}, que se cargan despues como registros de avance.`}
                 </p>
               </div>
             )}
@@ -654,8 +773,21 @@ export function FormRegistroObra({
           />
         </Campo>
 
-        <PieFormulario enviando={enviando} onCancelar={onCerrar} error={errorGeneral} />
+        </>
+        )}
+
+        <PiePasos
+          paso={paso}
+          total={2}
+          enviando={enviando}
+          puedeSeguir={listoPaso1}
+          onCancelar={onCerrar}
+          onAtras={() => setPaso(1)}
+          onSiguiente={() => setPaso(2)}
+          error={errorGeneral}
+        />
       </form>
+      <VentanaError mensaje={ventanaError} onCerrar={cerrarVentanaError} />
     </Modal>
   )
 }

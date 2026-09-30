@@ -41,6 +41,10 @@ const TABLAS = [
   'cuadrillaTrabajador',
   'meta',
   'tarea',
+  // Las liquidaciones van antes que los registros: un registro pagado apunta
+  // a su liquidacion.
+  'liquidacion',
+  'liquidacionLinea',
   'registroEjecucion',
 ]
 

@@ -75,6 +75,35 @@ ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_tarea_solo_ape
 ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_tarea_solo_apertura
   CHECK (id_tarea IS NULL OR id_registro_origen IS NULL);
 
+-- La cantidad total de la obra, en la unidad de su actividad. Las obras que
+-- existian antes de esta columna se completan con la regla de su unidad:
+-- m2 = largo x alto, ml = largo, y cualquier otra con largo x alto, que es lo
+-- que venian usando. Solo toca filas vacias, asi que se puede correr siempre.
+UPDATE registros_ejecucion r
+   SET cantidad_total = CASE WHEN a.unidad_medida = 'ml' THEN r.largo ELSE ROUND(r.largo * r.alto, 2) END
+  FROM actividades a
+ WHERE a.id_actividad = r.id_actividad
+   AND r.id_registro_origen IS NULL
+   AND r.cantidad_total IS NULL
+   AND r.largo IS NOT NULL
+   AND r.alto IS NOT NULL;
+
+-- La apertura lleva su cantidad total; los avances no la repiten.
+ALTER TABLE registros_ejecucion DROP CONSTRAINT IF EXISTS chk_reg_cantidad_total;
+ALTER TABLE registros_ejecucion ADD CONSTRAINT chk_reg_cantidad_total
+  CHECK (
+    (id_registro_origen IS NULL AND cantidad_total > 0)
+    OR (id_registro_origen IS NOT NULL AND cantidad_total IS NULL)
+  );
+
+-- Una sola obra por elemento y actividad. Si hubiera dos, el area del muro se
+-- contaria dos veces en el panel. El segundo dia de trabajo no es otra obra: es
+-- un avance de la primera. La API lo avisa antes; este indice es la red.
+DROP INDEX IF EXISTS uq_obra_elemento_actividad;
+CREATE UNIQUE INDEX uq_obra_elemento_actividad
+  ON registros_ejecucion (id_elemento, id_actividad)
+  WHERE id_registro_origen IS NULL;
+
 -- --- tareas -----------------------------------------------------------------
 
 ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_meta_positiva;
@@ -84,6 +113,12 @@ ALTER TABLE tareas ADD CONSTRAINT chk_tarea_meta_positiva
 ALTER TABLE tareas DROP CONSTRAINT IF EXISTS chk_tarea_fechas_coherentes;
 ALTER TABLE tareas ADD CONSTRAINT chk_tarea_fechas_coherentes
   CHECK (fecha_fin_plan IS NULL OR fecha_inicio_plan IS NULL OR fecha_fin_plan >= fecha_inicio_plan);
+
+-- Una sola tarea por elemento y actividad, por la misma razon que la obra: dos
+-- encargos del mismo trabajo acababan abriendo dos obras sobre el mismo muro.
+DROP INDEX IF EXISTS uq_tarea_elemento_actividad;
+CREATE UNIQUE INDEX uq_tarea_elemento_actividad
+  ON tareas (id_elemento, id_actividad);
 
 -- --- elementos_constructivos ------------------------------------------------
 -- Las medidas del elemento se toman una sola vez, al darlo de alta, y de ahi
@@ -142,3 +177,17 @@ DROP INDEX IF EXISTS uq_trabajador_asignacion_activa;
 CREATE UNIQUE INDEX uq_trabajador_asignacion_activa
   ON cuadrilla_trabajador (id_trabajador)
   WHERE activo = true;
+
+-- --- liquidaciones -----------------------------------------------------------
+
+ALTER TABLE liquidaciones DROP CONSTRAINT IF EXISTS chk_liquidacion_fechas;
+ALTER TABLE liquidaciones ADD CONSTRAINT chk_liquidacion_fechas
+  CHECK (hasta >= desde);
+
+ALTER TABLE liquidaciones DROP CONSTRAINT IF EXISTS chk_liquidacion_total;
+ALTER TABLE liquidaciones ADD CONSTRAINT chk_liquidacion_total
+  CHECK (total > 0);
+
+ALTER TABLE liquidacion_lineas DROP CONSTRAINT IF EXISTS chk_linea_valores;
+ALTER TABLE liquidacion_lineas ADD CONSTRAINT chk_linea_valores
+  CHECK (cantidad > 0 AND valor_unitario >= 0 AND subtotal >= 0 AND jornadas > 0);

@@ -33,6 +33,8 @@ const TABLAS = [
   ['cuadrillaTrabajador', 'cuadrilla_trabajador', 'id_cuadrilla_trabajador'],
   ['meta', 'metas', 'id_meta'],
   ['tarea', 'tareas', 'id_tarea'],
+  ['liquidacion', 'liquidaciones', 'id_liquidacion'],
+  ['liquidacionLinea', 'liquidacion_lineas', 'id_liquidacion_linea'],
   ['registroEjecucion', 'registros_ejecucion', 'id_ejecucion'],
 ]
 
@@ -49,6 +51,20 @@ async function main() {
 
   const contenido = JSON.parse(fs.readFileSync(ruta, 'utf8'))
   console.log(`Respaldo del ${contenido.generado}\n`)
+
+  // Los respaldos anteriores a la columna cantidad_total no la traen, y la base
+  // exige que toda obra la tenga. Se completa con la misma regla que usa
+  // db:constraints para las obras viejas: ml = largo, lo demas largo x alto.
+  const unidadDe = new Map(
+    (contenido.tablas?.actividad ?? []).map((a) => [a.id, a.unidadMedida]),
+  )
+  for (const r of contenido.tablas?.registroEjecucion ?? []) {
+    if (r.registroOrigenId !== null || (r.cantidadTotal !== undefined && r.cantidadTotal !== null)) continue
+    const largo = Number(r.largo)
+    const alto = Number(r.alto)
+    r.cantidadTotal =
+      unidadDe.get(r.actividadId) === 'ml' ? largo : Math.round(largo * alto * 100) / 100
+  }
 
   for (const [modelo, tabla, columnaId] of TABLAS) {
     const filas = contenido.tablas?.[modelo] ?? []

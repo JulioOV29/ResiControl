@@ -17,6 +17,8 @@ export const config = {
     '/cuadrillas/:path*',
     '/metas/:path*',
     '/ejecucion/:path*',
+    '/tareas/:path*',
+    '/liquidaciones/:path*',
     '/informes/:path*',
     '/usuarios/:path*',
   ],

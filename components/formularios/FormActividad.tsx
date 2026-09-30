@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { Modal } from '@/components/ui/modal'
-import { Campo, Entrada } from '@/components/ui/input'
+import { Campo, Entrada, Seleccion } from '@/components/ui/input'
 import { AvisoError, PieFormulario, useEnvio } from './base'
+import { UNIDADES_MEDIDA } from '@/lib/dominio'
 import type { Actividad } from '@/types/dominio'
 
 export function FormActividad({
@@ -39,6 +40,11 @@ export function FormActividad({
     )
   }, [abierto, registro])
 
+  // Una unidad guardada que ya no este en la lista se sigue ofreciendo, para
+  // que editar el nombre de una actividad vieja no se la cambie por detras.
+  const unidadFueraDeLista =
+    Boolean(form.unidadMedida) && !UNIDADES_MEDIDA.some((u) => u.valor === form.unidadMedida)
+
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
     guardar(
@@ -67,15 +73,30 @@ export function FormActividad({
               required
             />
           </Campo>
-          <Campo etiqueta="Unidad" error={errores.unidadMedida} requerido>
-            <Entrada
+          <Campo etiqueta="Unidad de medida" error={errores.unidadMedida} requerido>
+            <Seleccion
               value={form.unidadMedida}
               onChange={(e) => setForm({ ...form, unidadMedida: e.target.value })}
-              placeholder="m2"
               required
-            />
+            >
+              {UNIDADES_MEDIDA.map((u) => (
+                <option key={u.valor} value={u.valor}>
+                  {u.texto}
+                </option>
+              ))}
+
+              {/*
+                Una actividad vieja puede tener una unidad que ya no esta en la
+                lista. Se ofrece igual, para que editar su nombre no le cambie
+                la unidad por detras.
+              */}
+              {unidadFueraDeLista && (
+                <option value={form.unidadMedida}>{form.unidadMedida} (actual)</option>
+              )}
+            </Seleccion>
           </Campo>
         </div>
+
 
         <Campo etiqueta="Descripcion" error={errores.descripcion}>
           <Entrada

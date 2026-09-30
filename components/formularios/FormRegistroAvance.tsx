@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Modal } from '@/components/ui/modal'
 import { Campo, Entrada, Seleccion, AreaTexto } from '@/components/ui/input'
-import { AvisoError, PieFormulario, useEnvio } from './base'
+import { AvisoError, PieFormulario, VentanaError, useEnvio } from './base'
 import { pedir, useRecurso, useRecursoUnico } from '@/lib/cliente'
 import {
   fechaParaInput,
@@ -16,6 +16,15 @@ import {
 import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib/calculos'
 import { conProyecto } from '@/lib/etiquetas'
 import type { Cuadrilla, Meta, Obra, Registro } from '@/types/dominio'
+
+/** Si el trabajador tiene precio acordado para esa actividad. */
+function tienePrecio(
+  trabajador: { tarifas?: Array<{ actividadId: number }> } | undefined | null,
+  actividadId: string | number | null | undefined,
+) {
+  if (!actividadId) return true
+  return (trabajador?.tarifas ?? []).some((t) => t.actividadId === Number(actividadId))
+}
 
 // La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
 const hoy = hoyTexto
@@ -59,7 +68,15 @@ export function FormRegistroAvance({
   onCerrar: () => void
   onGuardado: (creado: Registro) => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const {
+    enviando,
+    errorGeneral,
+    errores,
+    guardar,
+    ventanaError,
+    mostrarVentanaError,
+    cerrarVentanaError,
+  } = useEnvio()
   const [form, setForm] = useState(vacio)
   const [metaTocada, setMetaTocada] = useState(false)
 
@@ -70,6 +87,12 @@ export function FormRegistroAvance({
     abierto ? (registro ? '/api/obras' : '/api/obras?abiertas=1') : null,
   )
   const obra = obras.datos.find((o) => String(o.id) === form.obraId) ?? null
+
+  /**
+   * La unidad la hereda la obra, igual que la actividad: si la obra se abrio
+   * midiendo metros lineales, el avance se pide en metros lineales.
+   */
+  const unidad = obra?.actividad?.unidadMedida ?? 'm2'
 
   const cuadrillas = useRecurso<Cuadrilla>(
     abierto && obra ? `/api/cuadrillas?proyectoId=${obra.elemento?.zona.piso.torre.proyecto.id}` : null,
@@ -204,6 +227,16 @@ export function FormRegistroAvance({
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
+    // Sin precio acordado para la actividad de la obra no se guarda. Al editar
+    // solo se exige si cambia el trabajador, igual que en el servidor.
+    const cambiaTrabajador = !registro || form.trabajadorId !== String(registro.trabajadorId ?? '')
+    if (cambiaTrabajador && faltaTarifa) {
+      mostrarVentanaError(
+        `${trabajadorElegido?.trabajador?.nombre ?? 'El trabajador'} ${trabajadorElegido?.trabajador?.apellido ?? ''} no tiene precio acordado para ${obra?.actividad?.nombre ?? 'esta actividad'}. Acuerda el precio en su ficha (Trabajadores) y vuelve a guardar.`,
+      )
+      return
+    }
+
     const { obraId, ...datos } = form
     void obraId
 
@@ -232,7 +265,8 @@ export function FormRegistroAvance({
       titulo={registro ? `Editar avance ${registro.codigoRegistro}` : 'Nuevo registro de avance'}
       descripcion="Continua una obra ya abierta. La ubicacion y las medidas se heredan."
       abierto={abierto}
-      onCerrar={onCerrar}
+      // Con la ventana de error abierta, Escape cierra solo esa ventana.
+      onCerrar={ventanaError ? cerrarVentanaError : onCerrar}
       ancho="xl"
     >
       <form onSubmit={enviarFormulario} className="space-y-5">
@@ -250,7 +284,8 @@ export function FormRegistroAvance({
               <option key={o.id} value={o.id}>
                 {o.codigoRegistro} · {o.actividad?.nombre} · {o.elemento?.codigoDwg}{' '}
                 {o.elemento?.descripcion} — {formatoPorcentaje(Math.min(1, o.resumen.avance))}{' '}
-                ejecutado, quedan {formatoNumero(o.resumen.pendiente)} m2
+                ejecutado, quedan {formatoNumero(o.resumen.pendiente)}{' '}
+                {o.actividad?.unidadMedida ?? 'm2'}
               </option>
             ))}
           </Seleccion>
@@ -279,8 +314,8 @@ export function FormRegistroAvance({
               <div>
                 <dt className="text-xs text-obra-500">Elemento</dt>
                 <dd className="mt-0.5 text-sm tabular-nums text-obra-900">
-                  {formatoNumero(obra.largo)} x {formatoNumero(obra.alto)} ={' '}
-                  {formatoNumero(obra.resumen.total)} m2
+                  {formatoNumero(obra.largo)} x {formatoNumero(obra.alto)} m ·{' '}
+                  {formatoNumero(obra.resumen.total)} {unidad} por ejecutar
                 </dd>
               </div>
               <div>
@@ -308,8 +343,8 @@ export function FormRegistroAvance({
                     ? obra.avances[obra.avances.length - 1].fechaEjecucion
                     : obra.fechaEjecucion,
                 )}
-                . Lleva {formatoNumero(obra.resumen.ejecutado)} m2 de{' '}
-                {formatoNumero(obra.resumen.total)} m2. El avance no puede tener fecha
+                . Lleva {formatoNumero(obra.resumen.ejecutado)} {unidad} de{' '}
+                {formatoNumero(obra.resumen.total)} {unidad}. El avance no puede tener fecha
                 anterior a ese dia.
               </p>
             </div>
@@ -352,11 +387,21 @@ export function FormRegistroAvance({
                 disabled={!form.cuadrillaId}
               >
                 <option value="">Sin asignar</option>
-                {integrantes.map((i) => (
-                  <option key={i.id} value={i.trabajadorId}>
-                    {i.trabajador?.apellido} {i.trabajador?.nombre}
-                  </option>
-                ))}
+                {integrantes.map((i) => {
+                  // Sin precio acordado para esta actividad no se puede elegir:
+                  // primero se acuerda en su ficha.
+                  const sinPrecio = Boolean(obra?.actividad?.id) && !tienePrecio(i.trabajador, obra?.actividad?.id)
+                  return (
+                    <option
+                      key={i.id}
+                      value={i.trabajadorId}
+                      disabled={sinPrecio && String(i.trabajadorId) !== form.trabajadorId}
+                    >
+                      {i.trabajador?.apellido} {i.trabajador?.nombre}
+                      {sinPrecio ? ' · sin precio acordado' : ''}
+                    </option>
+                  )
+                })}
               </Seleccion>
             </Campo>
           </div>
@@ -370,15 +415,15 @@ export function FormRegistroAvance({
           )}
 
           {faltaTarifa && (
-            <p className="mt-2 rounded-lg border border-acento-200 bg-acento-50 px-3 py-2 text-xs text-acento-800">
+            <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
               {trabajadorElegido?.trabajador?.nombre ?? 'Este trabajador'} no tiene precio
-              acordado para {obra?.actividad?.nombre ?? 'esta actividad'}, asi que la jornada se
-              guardara sin importe. Se arregla en su ficha, en la seccion Trabajadores.
+              acordado para {obra?.actividad?.nombre ?? 'esta actividad'}: no se puede asignar.
+              Acuerdalo primero en su ficha, en la seccion Trabajadores.
             </p>
           )}
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <Campo etiqueta="m2 ejecutados hoy" error={errores.m2Ejecutados} requerido>
+            <Campo etiqueta={`${unidad} ejecutados hoy`} error={errores.m2Ejecutados} requerido>
               <Entrada
                 type="number"
                 step="0.01"
@@ -389,7 +434,7 @@ export function FormRegistroAvance({
                 required
               />
             </Campo>
-            <Campo etiqueta="m2 meta del dia" error={errores.m2Meta}>
+            <Campo etiqueta={`${unidad} meta del dia`} error={errores.m2Meta}>
               <Entrada
                 type="number"
                 step="0.01"
@@ -430,7 +475,7 @@ export function FormRegistroAvance({
 
           {excedido && saldo && (
             <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              Te pasaste: a la obra solo le quedan {formatoNumero(saldo.pendiente)} m2 por
+              Te pasaste: a la obra solo le quedan {formatoNumero(saldo.pendiente)} {unidad} por
               ejecutar.
             </p>
           )}
@@ -453,7 +498,7 @@ export function FormRegistroAvance({
                 <dd className="mt-0.5 font-semibold tabular-nums text-obra-900">
                   {vista.jornada.rendimiento === null
                     ? '-'
-                    : `${formatoNumero(vista.jornada.rendimiento)} m2/h`}
+                    : `${formatoNumero(vista.jornada.rendimiento)} ${unidad}/h`}
                 </dd>
               </div>
               <div>
@@ -485,10 +530,11 @@ export function FormRegistroAvance({
                   />
                 </div>
                 <p className="mt-2 text-xs text-acento-800">
-                  {formatoNumero(vista.obra.acumulado)} de {formatoNumero(vista.obra.total)} m2
+                  {formatoNumero(vista.obra.acumulado)} de {formatoNumero(vista.obra.total)}{' '}
+                  {unidad}
                   {vista.obra.completa
                     ? '. Al guardar, la obra queda terminada.'
-                    : `, quedarian ${formatoNumero(vista.obra.pendiente)} m2.`}
+                    : `, quedarian ${formatoNumero(vista.obra.pendiente)} ${unidad}.`}
                 </p>
               </div>
             )}
@@ -509,6 +555,7 @@ export function FormRegistroAvance({
           error={errorGeneral}
         />
       </form>
+      <VentanaError mensaje={ventanaError} onCerrar={cerrarVentanaError} />
     </Modal>
   )
 }

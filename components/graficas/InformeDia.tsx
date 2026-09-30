@@ -75,10 +75,13 @@ function Dato({
 export function InformeDia({
   dia,
   actividades,
+  unidad = 'm2',
 }: {
   dia: Dia | null
   /** Las actividades del periodo, para poner nombre a cada id. */
   actividades: Actividad[]
+  /** La unidad en que mide el panel: m2, ml, und... */
+  unidad?: string
 }) {
   if (!dia) {
     return (
@@ -113,19 +116,19 @@ export function InformeDia({
         <Dato
           etiqueta="Produccion"
           valor={formatoNumero(dia.m2Ejecutados)}
-          unidad="m2"
+          unidad={unidad}
           detalle={`${dia.registros} jornada${dia.registros === 1 ? '' : 's'}`}
         />
         <Dato
           etiqueta="Rendimiento"
           valor={dia.rendimiento === null ? '-' : formatoNumero(dia.rendimiento)}
-          unidad="m2/h"
+          unidad={`${unidad}/h`}
           detalle={formatoDuracion(Math.round(dia.horasEfectivas * 60))}
         />
         <Dato
           etiqueta="Cumplimiento"
           valor={cumplimiento === null ? '-' : formatoPorcentaje(cumplimiento)}
-          detalle={dia.m2Meta > 0 ? `meta ${formatoNumero(dia.m2Meta)} m2` : 'sin meta ese dia'}
+          detalle={dia.m2Meta > 0 ? `meta ${formatoNumero(dia.m2Meta)} ${unidad}` : 'sin meta ese dia'}
         />
         <Dato
           etiqueta="Actividades"
@@ -155,7 +158,7 @@ export function InformeDia({
                 >
                   <span className="truncate font-medium text-obra-800">{a.etiqueta}</span>
                   <span className="shrink-0 tabular-nums">
-                    <span className="font-semibold text-obra-900">{formatoNumero(a.m2)} m2</span>
+                    <span className="font-semibold text-obra-900">{formatoNumero(a.m2)} {unidad}</span>
                     <span className="ml-2 text-obra-400">{formatoPorcentaje(parte, 0)}</span>
                   </span>
                 </li>
@@ -164,7 +167,7 @@ export function InformeDia({
             <li className="flex items-baseline justify-between gap-3 bg-obra-50 px-3 py-2 text-xs font-semibold">
               <span className="text-obra-700">Total del dia</span>
               <span className="tabular-nums text-obra-900">
-                {formatoNumero(dia.m2Ejecutados)} m2
+                {formatoNumero(dia.m2Ejecutados)} {unidad}
               </span>
             </li>
           </ul>

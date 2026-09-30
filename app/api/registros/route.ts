@@ -7,13 +7,15 @@ import {
   camposIndicadores,
   aHora,
   tarifaDeTrabajador,
-  medidasDelElemento,
+  cantidadParaObra,
+  validarObraUnica,
   validarCoherencia,
+  exigirPrecioAcordado,
   validarTareaParaObra,
   sincronizarEstadoTarea,
   tareaDeLaObra,
 } from '@/lib/consultas'
-import { agregarIndicadores, claveDeObra, num } from '@/lib/calculos'
+import { agregarIndicadores, cantidadDeObra, claveDeObra, num } from '@/lib/calculos'
 
 /**
  * Cuantas filas se mandan al navegador de una vez. La tabla no puede crecer sin
@@ -45,7 +47,10 @@ export async function GET(request: Request) {
         take: LIMITE,
         include: relacionesRegistro,
       }),
-      prisma.registroEjecucion.findMany({ where, select: camposIndicadores }),
+      prisma.registroEjecucion.findMany({
+        where,
+        select: { ...camposIndicadores, actividad: { select: { unidadMedida: true } } },
+      }),
     ])
 
     // El estado de cada obra (area, pendiente, avance) sale de su cadena
@@ -66,9 +71,36 @@ export async function GET(request: Request) {
         })
       : []
 
+    /**
+     * Un resumen por unidad de medida. Sumar m2 de pañete con metros lineales
+     * de filo y con tomacorrientes da un numero que no es nada, asi que cada
+     * unidad lleva sus propios indicadores. Van de la que mas jornadas tiene a
+     * la que menos, y la pantalla muestra la primera mientras no se elija otra.
+     */
+    const porUnidad = new Map<string, typeof paraResumen>()
+    for (const r of paraResumen) {
+      const unidad = r.actividad.unidadMedida
+      const lista = porUnidad.get(unidad) ?? []
+      lista.push(r)
+      porUnidad.set(unidad, lista)
+    }
+
+    const resumenes = [...porUnidad.entries()]
+      .map(([unidad, jornadas]) => {
+        const obras = new Set(jornadas.map(claveDeObra))
+        return {
+          unidad,
+          ...agregarIndicadores(
+            jornadas,
+            cadenas.filter((c) => obras.has(claveDeObra(c))),
+          ),
+        }
+      })
+      .sort((a, b) => b.registros - a.registros)
+
     return ok({
       registros,
-      resumen: agregarIndicadores(paraResumen, cadenas),
+      resumenes,
       truncado: paraResumen.length > registros.length,
     })
   } catch (error) {
@@ -107,21 +139,27 @@ export async function POST(request: Request) {
     const esAvance = Boolean(cuerpo?.registroAnteriorId)
 
     if (!esAvance) {
-      const { horaInicio, horaFinal, tareaId, ...datos } = esquemaRegistroObra.parse(cuerpo)
+      const { horaInicio, horaFinal, tareaId, cantidadTotal, ...datos } =
+        esquemaRegistroObra.parse(cuerpo)
 
       await validarCoherencia(datos)
+      // Sin precio acordado no se asigna: el trabajo quedaria sin poder pagarse.
+      await exigirPrecioAcordado(datos.trabajadorId, datos.actividadId)
+      // Un muro con una actividad es UNA obra: el segundo dia es un avance.
+      await validarObraUnica(datos.elementoId, datos.actividadId)
       // Si la obra nace de una tarea asignada, esa tarea tiene que estar libre
       // y hablar del mismo elemento y la misma actividad.
       if (tareaId) await validarTareaParaObra(tareaId, datos)
 
       // Las medidas salen del elemento constructivo, no del navegador, y se
-      // copian a la jornada: es lo que fija el 100% de esta obra.
-      const medidas = await medidasDelElemento(datos.elementoId)
+      // copian a la jornada junto con la cantidad total, que es lo que fija el
+      // 100% de esta obra en la unidad de su actividad.
+      const medidas = await cantidadParaObra(datos.elementoId, datos.actividadId, cantidadTotal)
 
-      if (datos.m2Ejecutados > medidas.area + 0.005) {
+      if (datos.m2Ejecutados > medidas.cantidad + 0.005) {
         throw new ErrorApi(
           409,
-          `El elemento ${medidas.elemento.codigoDwg} mide ${medidas.area.toFixed(2)} m2: no se puede ejecutar mas que eso`,
+          `La obra de ${medidas.actividad.nombre} en ${medidas.elemento.codigoDwg} es de ${medidas.cantidad.toFixed(2)} ${medidas.unidad}: no se puede ejecutar mas que eso`,
         )
       }
 
@@ -137,6 +175,7 @@ export async function POST(request: Request) {
           ...datos,
           largo: medidas.largo,
           alto: medidas.alto,
+          cantidadTotal: medidas.cantidad,
           tareaId,
           codigoRegistro,
           // La tarifa queda congelada en la jornada, como la meta.
@@ -196,6 +235,10 @@ export async function POST(request: Request) {
       fechaEjecucion: datos.fechaEjecucion,
     })
 
+    // La actividad es la de la obra: quien trabaja hoy tiene que tener precio
+    // acordado para ella.
+    await exigirPrecioAcordado(datos.trabajadorId, anterior.actividadId)
+
     const codigoObra = anterior.registroOrigen?.codigoRegistro ?? anterior.codigoRegistro
     // La actividad la hereda del anterior; el precio sale del trabajador de
     // ESTA jornada y de lo que valia hoy, no de quien abrio la obra ni de lo
@@ -218,13 +261,16 @@ export async function POST(request: Request) {
         select: {
           largo: true,
           alto: true,
+          cantidadTotal: true,
           m2Ejecutados: true,
+          actividad: { select: { unidadMedida: true } },
           avances: { select: { m2Ejecutados: true, numeroAvance: true } },
         },
       })
       if (!raiz) throw new ErrorApi(404, 'No se encontro la obra')
 
-      const total = num(raiz.largo) * num(raiz.alto)
+      const total = cantidadDeObra(raiz)
+      const unidad = raiz.actividad.unidadMedida
       const ejecutado =
         num(raiz.m2Ejecutados) + raiz.avances.reduce((suma, a) => suma + num(a.m2Ejecutados), 0)
       const pendiente = Math.max(0, total - ejecutado)
@@ -232,7 +278,7 @@ export async function POST(request: Request) {
       if (datos.m2Ejecutados > pendiente + 0.005) {
         throw new ErrorApi(
           409,
-          `A la obra solo le quedan ${pendiente.toFixed(2)} m2 por ejecutar, de un total de ${total.toFixed(2)} m2`,
+          `A la obra solo le quedan ${pendiente.toFixed(2)} ${unidad} por ejecutar, de un total de ${total.toFixed(2)} ${unidad}`,
         )
       }
 

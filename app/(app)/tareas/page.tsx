@@ -13,16 +13,22 @@ import { AccionesEditarBorrar } from '@/components/ui/acciones'
 import { ConfirmarEliminacion } from '@/components/ui/modal'
 import { FormTarea } from '@/components/formularios/FormTarea'
 import { crearEtiquetas } from '@/lib/etiquetas'
-import { ETIQUETA_ESTADO_EJECUCION, ESTADOS_EJECUCION } from '@/lib/dominio'
+import { ETIQUETA_ESTADO_EJECUCION, ESTADOS_EJECUCION, cantidadDelElemento } from '@/lib/dominio'
 import { formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
 import type { Catalogos, EstadoEjecucion, Tarea } from '@/types/dominio'
 
 /**
- * Como va la tarea: lo ejecutado de su obra sobre el area de su elemento, que
- * es donde viven las medidas.
+ * Como va la tarea: lo ejecutado de su obra sobre la cantidad total de esa
+ * obra, en la unidad de su actividad. Antes de abrirse la obra, la cantidad
+ * sale del elemento cuando la unidad lo permite (m2, ml); en und, m3 o kg no se
+ * sabe hasta que el residente la escribe al abrirla.
  */
 function avanceDe(t: Tarea) {
-  const total = (t.elemento?.largo ?? 0) * (t.elemento?.alto ?? 0)
+  const unidad = t.actividad?.unidadMedida ?? 'm2'
+  const total =
+    t.registro?.cantidadTotal ??
+    cantidadDelElemento(unidad, t.elemento?.largo ?? 0, t.elemento?.alto ?? 0) ??
+    0
   const ejecutado = t.registro
     ? t.registro.m2Ejecutados + t.registro.avances.reduce((s, a) => s + a.m2Ejecutados, 0)
     : 0
@@ -31,6 +37,7 @@ function avanceDe(t: Tarea) {
     ejecutado,
     pendiente: Math.max(0, total - ejecutado),
     fraccion: total > 0 ? ejecutado / total : 0,
+    unidad,
   }
 }
 
@@ -131,7 +138,9 @@ export default function TareasPage() {
               {formatoPorcentaje(a.fraccion)}
             </span>
             <span className="block text-xs tabular-nums text-obra-500">
-              {formatoNumero(a.ejecutado)} de {formatoNumero(a.total)} m2
+              {a.total > 0
+                ? `${formatoNumero(a.ejecutado)} de ${formatoNumero(a.total)} ${a.unidad}`
+                : `cantidad en ${a.unidad} al abrir la obra`}
             </span>
           </span>
         )

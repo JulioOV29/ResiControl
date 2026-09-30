@@ -24,7 +24,7 @@ import {
   Percent,
   Ruler,
 } from 'lucide-react'
-import { useRecursoUnico, useRetardo } from '@/lib/cliente'
+import { useRecursoUnico, useRefrescoAlVolver, useRetardo } from '@/lib/cliente'
 import { EncabezadoPagina } from '@/components/EncabezadoPagina'
 import { Indicador } from '@/components/Indicador'
 import { Tarjeta, TarjetaCuerpo } from '@/components/ui/card'
@@ -35,16 +35,21 @@ import { formatoDuracion } from '@/lib/calculos'
 import {
   conciliar,
   expandirFilas,
+  idsConRegistros,
   opcionesDisponibles,
   type Dimension,
 } from '@/lib/filtrosRelacionales'
 import { formatoFecha, formatoNumero, formatoPorcentaje, hoyTexto } from '@/lib/utils'
-import { crearEtiquetas } from '@/lib/etiquetas'
+import { conBaja, crearEtiquetas } from '@/lib/etiquetas'
 import { CalendarioRegistros } from '@/components/graficas/Calendario'
 import { InformeDia } from '@/components/graficas/InformeDia'
 import type { Catalogos } from '@/types/dominio'
 
 type Panel = {
+  /** La unidad en que esta medido todo el panel. Nunca se mezclan. */
+  unidad: string
+  /** Las unidades que tienen jornadas con los filtros puestos. */
+  unidades: Array<{ unidad: string; registros: number }>
   indicadores: {
     registros: number
     obras: number
@@ -118,6 +123,8 @@ const filtrosVacios = {
   cuadrillaId: '',
   trabajadorId: '',
   cargoId: '',
+  /** m2, ml, und... Vacio = la que mas jornadas tenga. */
+  unidad: '',
   desde: '',
   hasta: '',
 }
@@ -225,7 +232,13 @@ export default function DashboardPage() {
   // con ella las combinaciones que existen de verdad en los registros: con eso
   // cada filtro sabe, sin volver al servidor, que opciones siguen teniendo
   // trabajo detras despues de elegir los demas.
-  const { dato: catalogos } = useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
+  const { dato: catalogos, recargarEnSilencio: recargarCatalogos } =
+    useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
+
+  // Al volver a esta pestana se piden otra vez los catalogos: lo que se haya
+  // dado de alta mientras tanto (una actividad, una cuadrilla) aparece en los
+  // filtros sin recargar la pagina.
+  useRefrescoAlVolver(recargarCatalogos)
 
   // --- Filtros relacionales ------------------------------------------------
   // Cada fila es una combinacion real de ubicacion, actividad, cuadrilla y
@@ -238,16 +251,39 @@ export default function DashboardPage() {
 
   // Para cada filtro, lo que sigue disponible dadas las elecciones de los demas.
   const disponibles = useMemo(() => opcionesDisponibles(filas, filtros), [filas, filtros])
+
+  // Y lo que aparece en algun registro, sin mirar filtros: lo que no esta aqui
+  // es nuevo, y lo nuevo no se esconde.
+  const conRegistros = useMemo(() => idsConRegistros(filas), [filas])
+
+  /**
+   * Una opcion se ofrece si tiene trabajo compatible con los demas filtros
+   * (la regla relacional de siempre) o si no tiene trabajo en ninguna parte.
+   *
+   * Lo segundo es la excepcion: una actividad, una torre o una cuadrilla recien
+   * creada no esta en ningun registro, asi que la regla relacional no tiene nada
+   * que decir de ella, y la escondia justo el dia en que se da de alta. Sin
+   * registros no hay contradiccion posible con lo elegido: se ofrece.
+   */
   const habilitada = (dimension: Dimension, id: number) =>
-    filas.length === 0 || disponibles[dimension].has(id)
+    filas.length === 0 ||
+    disponibles[dimension].has(id) ||
+    !conRegistros[dimension].has(id)
   // Filtra una lista a lo que sigue teniendo registros: la opcion desaparece
   // de la lista en vez de quedar en gris. Mientras los catalogos no traigan
   // combinaciones (cargando) no se descarta nada.
   const soloDisponibles = <T extends { id: number }>(dimension: Dimension, lista: T[]) =>
     filas.length === 0 ? lista : lista.filter((x) => habilitada(dimension, x.id))
+  // Las listas de abajo no necesitan a conRegistros en sus dependencias: solo
+  // cambia cuando cambian las filas, y filas ya esta en todas.
 
   const proyectos = soloDisponibles('proyectoId', catalogos?.proyectos ?? [])
-  const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? [])
+  // Solo las actividades que se miden en la unidad del panel: elegir el filo
+  // (ml) mientras se mira en m2 no tiene sentido; se cambia primero la unidad.
+  const unidadVista = dato?.unidad ?? filtros.unidad
+  const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? []).filter(
+    (a) => !unidadVista || a.unidadMedida === unidadVista,
+  )
   const trabajadores = soloDisponibles('trabajadorId', catalogos?.trabajadores ?? [])
   const cargos = soloDisponibles('cargoId', catalogos?.cargos ?? [])
 
@@ -375,7 +411,16 @@ export default function DashboardPage() {
   // ahi), se suelta lo anterior, y asi nunca queda una combinacion sin datos
   // que el residente no haya pedido.
   const cambiar = (campos: Partial<typeof filtrosVacios>) =>
-    setFiltros((f) => conciliar(filas, { ...f, ...campos }, Object.keys(campos)))
+    setFiltros((f) => {
+      // Elegir una actividad ya decide la unidad: la que estuviera puesta se
+      // suelta para que el panel pase a medir en la de esa actividad.
+      const extra = campos.actividadId ? { unidad: '' } : {}
+      return conciliar(filas, { ...f, ...campos, ...extra }, Object.keys(campos))
+    })
+
+  /** La unidad en que mide el panel. Todo lo que se pinta abajo va en ella. */
+  const uni = dato?.unidad ?? (filtros.unidad || 'm2')
+  const unidadesDisponibles = dato?.unidades ?? []
 
   const filtrosActivos = Object.values(filtros).filter(Boolean).length
   const i = dato?.indicadores
@@ -496,6 +541,28 @@ export default function DashboardPage() {
           ))}
         </FiltroSeleccion>
 
+        {/*
+          La unidad va antes que la actividad porque la acota. Solo aparece
+          cuando hay jornadas en mas de una unidad: con una sola no hay nada que
+          elegir. No tiene opcion "Todas" a proposito: m2 y ml no se suman.
+        */}
+        {(unidadesDisponibles.length > 1 || filtros.unidad) && (
+          <FiltroSeleccion
+            etiqueta="Unidad"
+            value={uni}
+            onChange={(v) => cambiar({ unidad: v, actividadId: '' })}
+          >
+            {unidadesDisponibles.map((u) => (
+              <option key={u.unidad} value={u.unidad}>
+                {u.unidad} · {u.registros} jornada{u.registros === 1 ? '' : 's'}
+              </option>
+            ))}
+            {!unidadesDisponibles.some((u) => u.unidad === uni) && (
+              <option value={uni}>{uni}</option>
+            )}
+          </FiltroSeleccion>
+        )}
+
         <FiltroSeleccion
           etiqueta="Actividad"
           value={filtros.actividadId}
@@ -504,7 +571,7 @@ export default function DashboardPage() {
           <option value="">Todas</option>
           {actividades.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.nombre}
+              {conBaja(a.nombre, a.activo)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -517,7 +584,7 @@ export default function DashboardPage() {
           <option value="">Todas</option>
           {cuadrillas.map((c) => (
             <option key={c.id} value={c.id}>
-              {etiquetas.cuadrilla(c)}
+              {conBaja(etiquetas.cuadrilla(c), c.activo)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -530,7 +597,7 @@ export default function DashboardPage() {
           <option value="">Todos</option>
           {trabajadores.map((t) => (
             <option key={t.id} value={t.id}>
-              {t.apellido} {t.nombre}
+              {conBaja(`${t.apellido} ${t.nombre}`, t.activo)}
             </option>
           ))}
         </FiltroSeleccion>
@@ -584,7 +651,7 @@ export default function DashboardPage() {
               etiqueta="Produccion total"
               sobretitulo="Ejecutado en el periodo"
               valor={formatoNumero(i.m2Ejecutados)}
-              unidad="m2"
+              unidad={uni}
               icono={Ruler}
               acento
               chip={`${formatoNumero(i.horasEfectivas, 0)} h efectivas`}
@@ -593,13 +660,13 @@ export default function DashboardPage() {
             />
             <Indicador
               etiqueta="Avance real"
-              sobretitulo={`acumulado sobre ${formatoNumero(i.m2Totales)} m2 de obra`}
+              sobretitulo={`acumulado sobre ${formatoNumero(i.m2Totales)} ${uni} de obra`}
               valor={formatoPorcentaje(i.avance)}
               icono={Percent}
               progreso={i.avance ?? 0}
               chip={`${formatoNumero(dato.obrasTerminadas, 0)} de ${formatoNumero(i.obras, 0)} obras al 100%`}
               tonoChip={dato.obrasTerminadas === i.obras ? 'bueno' : 'neutro'}
-              detalle={`faltan ${formatoNumero(i.m2Pendientes)} m2`}
+              detalle={`faltan ${formatoNumero(i.m2Pendientes)} ${uni}`}
             />
             <Indicador
               etiqueta="Cumplimiento"
@@ -611,17 +678,17 @@ export default function DashboardPage() {
               tonoChip={(i.cumplimiento ?? 0) >= 1 ? 'bueno' : 'aviso'}
               detalle={
                 i.jornadasSinMeta > 0
-                  ? `meta ${formatoNumero(i.m2Meta)} m2, ${i.jornadasSinMeta} jornada${
+                  ? `meta ${formatoNumero(i.m2Meta)} ${uni}, ${i.jornadasSinMeta} jornada${
                       i.jornadasSinMeta === 1 ? '' : 's'
                     } sin meta fuera del calculo`
-                  : `meta ${formatoNumero(i.m2Meta)} m2`
+                  : `meta ${formatoNumero(i.m2Meta)} ${uni}`
               }
             />
             <Indicador
               etiqueta="Rendimiento"
               sobretitulo="Por hora efectiva trabajada"
               valor={i.rendimiento === null ? '-' : formatoNumero(i.rendimiento)}
-              unidad="m2/h"
+              unidad={`${uni}/h`}
               icono={Gauge}
               detalle={`${formatoNumero(i.horasEfectivas, 1)} h sobre ${formatoNumero(i.registros, 0)} jornadas`}
             />
@@ -632,7 +699,7 @@ export default function DashboardPage() {
             <Grafica
               titulo="Evolucion de la produccion"
               descripcion="Acumulado de lo ejecutado frente al acumulado de la meta, a lo largo del periodo."
-              nota="La meta sale de los m2 meta que lleva cada registro, no de un programa de obra aparte: mide contra lo que se propuso el dia que se trabajo."
+              nota={`La meta sale de los ${uni} meta que lleva cada registro, no de un programa de obra aparte: mide contra lo que se propuso el dia que se trabajo.`}
               vacio={curva.length === 0}
               acciones={
                 <>
@@ -654,7 +721,7 @@ export default function DashboardPage() {
                   />
                 </>
               }
-              columnas={['Periodo', 'Ejecutado m2', 'Acumulado m2', 'Meta acumulada m2', 'Diferencia']}
+              columnas={['Periodo', `Ejecutado ${uni}`, `Acumulado ${uni}`, `Meta acumulada ${uni}`, 'Diferencia']}
               filas={curva.map((c) => [
                 c.etiqueta,
                 formatoNumero(c.m2Ejecutados),
@@ -744,13 +811,13 @@ export default function DashboardPage() {
             {/* 2. Produccion por dia, con el reparto por actividad */}
             <Grafica
               titulo="Produccion por dia"
-              descripcion="m2 ejecutados en cada jornada. Solo aparecen los dias con trabajo registrado."
+              descripcion={`${uni} ejecutados en cada jornada. Solo aparecen los dias con trabajo registrado.`}
               nota="Las barras son el total del dia, sin repartir. El desglose por actividad esta arriba para el periodo completo, en el globo para cada dia, y dia por dia en la vista de Datos."
               vacio={datosDia.length === 0}
               columnas={[
                 'Dia',
-                ...datosActividad.map((a) => `${a.etiqueta} m2`),
-                'Total m2',
+                ...datosActividad.map((a) => `${a.etiqueta} ${uni}`),
+                `Total ${uni}`,
                 'Horas',
                 'Rendimiento',
                 'Registros',
@@ -772,7 +839,7 @@ export default function DashboardPage() {
                 }
                 items={datosActividad.map((a) => ({
                   etiqueta: a.etiqueta,
-                  valor: `${formatoNumero(a.m2Ejecutados)} m2`,
+                  valor: `${formatoNumero(a.m2Ejecutados)} ${uni}`,
                   detalle: `${formatoPorcentaje(a.participacion)} · ${formatoNumero(a.obras, 0)} obras`,
                 }))}
               />
@@ -791,7 +858,7 @@ export default function DashboardPage() {
                           titulo={String(label)}
                           lineas={[
                             {
-                              etiqueta: 'm2 ejecutados',
+                              etiqueta: `${uni} ejecutados`,
                               valor: formatoNumero(dia.m2Ejecutados),
                               color: paleta.serie1,
                             },
@@ -824,7 +891,7 @@ export default function DashboardPage() {
               descripcion="Los dias con trabajo van marcados. Pulsa uno para ver su informe al lado; el cursor por encima solo lo asoma."
               nota="Un solo color a proposito: lo que responde el calendario es que dias hubo trabajo y cuales quedaron en blanco. Cuanto se hizo cada dia esta en la grafica de produccion y en la vista de Datos."
               vacio={datosDia.length === 0}
-              columnas={['Dia', 'Ejecutado m2', 'Meta m2', 'Horas', 'Jornadas']}
+              columnas={['Dia', `Ejecutado ${uni}`, `Meta ${uni}`, 'Horas', 'Jornadas']}
               filas={datosDia.map((d) => [
                 formatoFecha(d.fecha),
                 formatoNumero(d.m2Ejecutados),
@@ -849,6 +916,7 @@ export default function DashboardPage() {
                     }))}
                     seleccionada={fechaInforme}
                     onSeleccionar={setDiaAbierto}
+                    unidad={uni}
                   />
                 </div>
 
@@ -870,6 +938,7 @@ export default function DashboardPage() {
                     clave: a.clave,
                     etiqueta: a.etiqueta,
                   }))}
+                  unidad={uni}
                 />
               </div>
             </Grafica>
@@ -878,7 +947,7 @@ export default function DashboardPage() {
               {/* 4. Rendimiento por dia */}
               <Grafica
                 titulo="Rendimiento por dia"
-                descripcion="m2 por hora efectiva de cada jornada."
+                descripcion={`${uni} por hora efectiva de cada jornada.`}
                 nota="Va aparte y no encima de la produccion a proposito: dos escalas distintas en un mismo eje inventan relaciones que los datos no tienen."
                 vacio={datosDia.length === 0}
                 acciones={
@@ -893,7 +962,7 @@ export default function DashboardPage() {
                     ]}
                   />
                 }
-                columnas={['Dia', 'Rendimiento m2/h', 'm2 ejecutados', 'Horas']}
+                columnas={['Dia', `Rendimiento ${uni}/h`, `${uni} ejecutados`, 'Horas']}
                 filas={datosDia.map((d) => [
                   formatoFecha(d.fecha),
                   d.rendimiento === null ? '-' : formatoNumero(d.rendimiento),
@@ -919,7 +988,7 @@ export default function DashboardPage() {
                             titulo={String(label)}
                             lineas={[
                               {
-                                etiqueta: 'm2 por hora',
+                                etiqueta: `${uni} por hora`,
                                 valor: formatoNumero(Number(payload[0].value)),
                                 color: paleta.serie1,
                               },
@@ -958,8 +1027,8 @@ export default function DashboardPage() {
               {/* 4. Rendimiento por cuadrilla */}
               <Grafica
                 titulo="Rendimiento por cuadrilla"
-                descripcion="m2 por hora efectiva de cada cuadrilla."
-                nota="El rendimiento de cada cuadrilla sale de dividir todos sus m2 entre todas sus horas, no de promediar los rendimientos de sus dias."
+                descripcion={`${uni} por hora efectiva de cada cuadrilla.`}
+                nota={`El rendimiento de cada cuadrilla sale de dividir todos sus ${uni} entre todas sus horas, no de promediar los rendimientos de sus dias.`}
                 vacio={datosCuadrilla.length === 0}
                 acciones={
                   <Leyenda
@@ -973,7 +1042,7 @@ export default function DashboardPage() {
                     ]}
                   />
                 }
-                columnas={['Cuadrilla', 'Rendimiento m2/h', 'm2 ejecutados', 'Horas', 'Cumplimiento']}
+                columnas={['Cuadrilla', `Rendimiento ${uni}/h`, `${uni} ejecutados`, 'Horas', 'Cumplimiento']}
                 filas={datosCuadrilla.map((c) => [
                   c.etiqueta,
                   c.rendimiento === null ? '-' : formatoNumero(c.rendimiento),
@@ -1007,7 +1076,7 @@ export default function DashboardPage() {
                             titulo={String(label)}
                             lineas={[
                               {
-                                etiqueta: 'm2 por hora',
+                                etiqueta: `${uni} por hora`,
                                 valor: formatoNumero(Number(payload[0].value)),
                                 color: paleta.serie1,
                               },
@@ -1042,10 +1111,10 @@ export default function DashboardPage() {
               vacio={datosUbicacion.length === 0}
               columnas={[
                 'Ubicacion',
-                'Periodo m2',
-                'Acumulado m2',
-                'Total m2',
-                'Pendiente m2',
+                `Periodo ${uni}`,
+                `Acumulado ${uni}`,
+                `Total ${uni}`,
+                `Pendiente ${uni}`,
                 'Avance',
               ]}
               filas={datosUbicacion.map((u) => [
@@ -1081,7 +1150,7 @@ export default function DashboardPage() {
                               {u.etiqueta}
                             </span>
                             <span className="block text-xs tabular-nums text-obra-500">
-                              {formatoNumero(u.m2Acumulados)} de {formatoNumero(u.m2Totales)} m2
+                              {formatoNumero(u.m2Acumulados)} de {formatoNumero(u.m2Totales)} {uni}
                               {u.m2Pendientes > 0 &&
                                 `, faltan ${formatoNumero(u.m2Pendientes)}`}
                             </span>

@@ -192,6 +192,7 @@ export interface ReferenciaRegistro {
   m2Ejecutados?: number
   largo?: number | null
   alto?: number | null
+  cantidadTotal?: number | null
 }
 
 export interface Registro {
@@ -214,6 +215,8 @@ export interface Registro {
   /** Medidas del elemento. Solo las lleva el registro que abre la obra. */
   largo: number | null
   alto: number | null
+  /** Cantidad total de la obra en la unidad de su actividad. Solo en la apertura. */
+  cantidadTotal: number | null
   m2Ejecutados: number
   horaInicio: string
   horaFinal: string
@@ -235,6 +238,9 @@ export interface Registro {
   registroAnterior?: ReferenciaRegistro | null
   registroOrigen?: ReferenciaRegistro | null
   continuacion?: { id: number; codigoRegistro: string; fechaEjecucion: string } | null
+  /** La liquidacion en que se pago esta jornada. */
+  liquidacionId?: number | null
+  liquidacion?: { id: number; codigo: string } | null
 }
 
 /** Una obra: el registro que la abrio, con toda su cadena de avances. */
@@ -325,6 +331,7 @@ export interface Tarea {
     codigoRegistro: string
     fechaEjecucion: string
     m2Ejecutados: number
+    cantidadTotal: number | null
     avances: Array<{ m2Ejecutados: number }>
   } | null
 }
@@ -332,7 +339,12 @@ export interface Tarea {
 /** Lo que devuelve /api/registros: la lista y su resumen ya calculado. */
 export interface ListaRegistros {
   registros: Registro[]
-  resumen: {
+  /**
+   * Un resumen por unidad de medida (m2, ml, und...), de la que mas jornadas
+   * tiene a la que menos. Nunca se suman unidades distintas.
+   */
+  resumenes: Array<{
+    unidad: string
     registros: number
     obras: number
     m2Totales: number
@@ -349,7 +361,76 @@ export interface ListaRegistros {
     cumplimiento: number | null
     avance: number | null
     obrasTerminadas: number
-  }
+  }>
   /** true cuando el filtro daba mas registros de los que caben en la pagina. */
   truncado: boolean
+}
+
+// ---------------------------------------------------------------------------
+//  Liquidaciones
+// ---------------------------------------------------------------------------
+
+export interface LineaLiquidacion {
+  actividadId: number
+  actividadNombre: string
+  unidad: string
+  valorUnitario: number
+  cantidad: number
+  jornadas: number
+  subtotal: number
+}
+
+/** Una jornada vista desde una liquidacion. */
+export interface JornadaLiquidacion {
+  id: number
+  codigoRegistro: string
+  fechaEjecucion: string
+  actividad: string
+  unidad: string
+  cantidad: number
+  valorUnitario: number | null
+  subtotal: number | null
+  elemento: string
+  liquidacion?: string | null
+}
+
+export interface TrabajadorLiquidado {
+  id: number
+  nombre: string
+  apellido: string
+  documento: string | null
+  cargo: { nombre: string }
+}
+
+export interface Liquidacion {
+  id: number
+  codigo: string
+  trabajadorId: number
+  tipoPeriodo: 'MES' | 'QUINCENA' | 'RANGO'
+  desde: string
+  hasta: string
+  total: number
+  banco: string | null
+  tipoCuenta: string | null
+  numeroCuenta: string
+  observaciones: string | null
+  createdAt: string
+  trabajador: TrabajadorLiquidado
+  usuarioLiquida: { id: number; nombre: string; apellido: string; email: string }
+  lineas?: Array<LineaLiquidacion & { id: number }>
+  registros?: JornadaLiquidacion[]
+  _count?: { registros: number }
+}
+
+/** Lo que devuelve /api/liquidaciones/previa. */
+export interface PreviaLiquidacion {
+  trabajador: TrabajadorLiquidado
+  ultimaCuenta: { banco: string | null; tipoCuenta: string | null; numeroCuenta: string } | null
+  desde: string
+  hasta: string
+  lineas: LineaLiquidacion[]
+  total: number
+  jornadas: JornadaLiquidacion[]
+  sinPrecio: JornadaLiquidacion[]
+  yaPagadas: JornadaLiquidacion[]
 }

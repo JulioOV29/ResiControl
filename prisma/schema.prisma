@@ -41,6 +41,14 @@ enum EstadoProyecto {
 }
 
 /// Estado de avance de una torre o de un elemento constructivo.
+/// Como se eligio el lapso de una liquidacion. Las fechas desde y hasta son
+/// las que mandan; esto solo dice como se llego a ellas.
+enum PeriodoLiquidacion {
+  MES
+  QUINCENA
+  RANGO
+}
+
 enum EstadoEjecucion {
   PENDIENTE
   EN_PROCESO
@@ -73,6 +81,7 @@ model Usuario {
   registrosCreados      RegistroEjecucion[] @relation("RegistroCreadoPor")
   registrosActualizados RegistroEjecucion[] @relation("RegistroActualizadoPor")
   tareasAsignadas       Tarea[]             @relation("TareaAsignadaPor")
+  liquidacionesHechas   Liquidacion[]       @relation("LiquidacionHechaPor")
 
   @@map("usuarios")
 }
@@ -195,6 +204,7 @@ model Actividad {
   registros RegistroEjecucion[]
   tarifas   TrabajadorActividad[]
   tareas    Tarea[]
+  lineasLiquidacion LiquidacionLinea[]
 
   @@map("actividades")
 }
@@ -230,6 +240,7 @@ model Trabajador {
   registros    RegistroEjecucion[]
   tarifas      TrabajadorActividad[]
   tareas       Tarea[]
+  liquidaciones Liquidacion[]
 
   @@index([cargoId])
   @@map("trabajadores")
@@ -416,6 +427,13 @@ model RegistroEjecucion {
   largo Decimal? @db.Decimal(10, 2)
   alto  Decimal? @db.Decimal(10, 2)
 
+  /// Cantidad total de la obra, en la unidad de su actividad: es lo que marca el
+  /// 100%. Solo la lleva el registro que abre la obra. Sale del elemento cuando
+  /// la unidad lo permite (m2 = largo x alto, ml = largo) y la escribe el
+  /// residente cuando no (und, m3, kg). Se guarda copiada por la misma razon que
+  /// largo y alto: corregir el elemento manana no mueve lo ya medido.
+  cantidadTotal Decimal? @map("cantidad_total") @db.Decimal(12, 2)
+
   /// Cantidad producida en este dia, no el total de la obra.
   m2Ejecutados Decimal @map("m2_ejecutados") @db.Decimal(12, 2)
 
@@ -438,13 +456,22 @@ model RegistroEjecucion {
 
   observaciones String? @db.Text
 
+  /// La liquidacion en la que se pago esta jornada. Nula mientras no se haya
+  /// pagado. Una jornada pagada ya no se edita ni se borra: cambiarla
+  /// cambiaria lo que dice un pago ya hecho.
+  liquidacionId Int? @map("id_liquidacion")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  liquidacion        Liquidacion?         @relation(fields: [liquidacionId], references: [id], onDelete: SetNull)
   elemento           ElementoConstructivo @relation(fields: [elementoId], references: [id], onDelete: Restrict)
   actividad        Actividad     @relation(fields: [actividadId], references: [id], onDelete: Restrict)
   cuadrilla        Cuadrilla     @relation(fields: [cuadrillaId], references: [id], onDelete: Restrict)
-  trabajador       Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: SetNull)
+  /// Restrict y no SetNull: la jornada guarda lo que se le pago a esa persona
+  /// (valor_m2), y borrar al trabajador la dejaba pagada sin dueño. Un
+  /// trabajador que ya trabajo se desactiva, no se borra.
+  trabajador       Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: Restrict)
   usuarioRegistra  Usuario       @relation("RegistroCreadoPor", fields: [usuarioRegistraId], references: [id], onDelete: Restrict)
   usuarioActualiza Usuario?      @relation("RegistroActualizadoPor", fields: [usuarioActualizaId], references: [id], onDelete: SetNull)
 
@@ -471,5 +498,69 @@ model RegistroEjecucion {
   @@unique([registroOrigenId, numeroAvance])
   @@index([registroOrigenId])
   @@index([fechaEjecucion, actividadId])
+  @@index([liquidacionId])
   @@map("registros_ejecucion")
+}
+
+// ---------------------------------------------------------------------------
+//  Liquidaciones: el pago de lo producido
+// ---------------------------------------------------------------------------
+
+/// Un pago a un trabajador por lo que ejecuto en un lapso.
+///
+/// Se calcula con la tarifa congelada en cada jornada (valor_m2), no con la
+/// tarifa vigente: lo que vale el trabajo se decidio el dia que se hizo. Cada
+/// jornada pagada queda marcada con la liquidacion (id_liquidacion en el
+/// registro), y asi no se puede pagar dos veces.
+///
+/// Las lineas guardan el resumen tal como se pago: actividad, precio, cantidad
+/// y subtotal. Son una foto: corregir despues el nombre de una actividad no
+/// cambia lo que dice el comprobante.
+model Liquidacion {
+  id            Int                @id @default(autoincrement()) @map("id_liquidacion")
+  codigo        String             @unique @db.VarChar(30)
+  trabajadorId  Int                @map("id_trabajador")
+  tipoPeriodo   PeriodoLiquidacion @map("tipo_periodo")
+  desde         DateTime           @db.Date
+  hasta         DateTime           @db.Date
+  total         Decimal            @db.Decimal(14, 2)
+  /// A donde se deposita. El numero es obligatorio; banco y tipo ayudan a quien
+  /// hace la transferencia.
+  banco         String?            @db.VarChar(80)
+  tipoCuenta    String?            @map("tipo_cuenta") @db.VarChar(20)
+  numeroCuenta  String             @map("numero_cuenta") @db.VarChar(40)
+  observaciones String?            @db.Text
+  /// El responsable: quien genero la liquidacion.
+  usuarioLiquidaId Int             @map("id_usuario_liquida")
+  createdAt     DateTime           @default(now()) @map("created_at")
+
+  trabajador     Trabajador         @relation(fields: [trabajadorId], references: [id], onDelete: Restrict)
+  usuarioLiquida Usuario            @relation("LiquidacionHechaPor", fields: [usuarioLiquidaId], references: [id], onDelete: Restrict)
+  lineas         LiquidacionLinea[]
+  registros      RegistroEjecucion[]
+
+  @@index([trabajadorId])
+  @@index([desde, hasta])
+  @@map("liquidaciones")
+}
+
+/// Un renglon del pago: una actividad a un precio. Si el precio de esa
+/// actividad cambio dentro del lapso, salen dos renglones, uno por precio.
+model LiquidacionLinea {
+  id            Int     @id @default(autoincrement()) @map("id_liquidacion_linea")
+  liquidacionId Int     @map("id_liquidacion")
+  actividadId   Int     @map("id_actividad")
+  /// Copia del nombre y la unidad de la actividad el dia del pago.
+  actividadNombre String  @map("actividad_nombre") @db.VarChar(100)
+  unidad        String  @db.VarChar(20)
+  valorUnitario Decimal @map("valor_unitario") @db.Decimal(12, 2)
+  cantidad      Decimal @db.Decimal(14, 2)
+  jornadas      Int
+  subtotal      Decimal @db.Decimal(14, 2)
+
+  liquidacion Liquidacion @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
+  actividad   Actividad   @relation(fields: [actividadId], references: [id], onDelete: Restrict)
+
+  @@index([liquidacionId])
+  @@map("liquidacion_lineas")
 }

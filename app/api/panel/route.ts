@@ -24,9 +24,14 @@ export async function GET(request: Request) {
 
     // Las dos consultas salen a la vez: son independientes y encadenarlas era
     // pagar dos veces la latencia de ir hasta la base.
-    const [registros, extremos] = await Promise.all([
+    // La unidad no entra en la consulta: primero se ve que unidades hay en lo
+    // filtrado, y luego se elige una.
+    const sinUnidad = new URLSearchParams(parametros)
+    sinUnidad.delete('unidad')
+
+    const [todas, extremos] = await Promise.all([
       prisma.registroEjecucion.findMany({
-        where: filtroRegistros(parametros),
+        where: filtroRegistros(sinUnidad),
         orderBy: { fechaEjecucion: 'asc' },
         // Solo las columnas que entran en algun calculo o en alguna etiqueta.
         // Aqui no se pagina a proposito: un indicador calculado sobre media
@@ -39,6 +44,30 @@ export async function GET(request: Request) {
         _max: { fechaEjecucion: true },
       }),
     ])
+
+    /**
+     * El panel mide en UNA sola unidad.
+     *
+     * Pañete en m2, filo en metros lineales y tomacorrientes en unidades no se
+     * pueden sumar: 45 m2 + 10 ml no son 55 de nada. Se cuentan las jornadas de
+     * cada unidad dentro del filtro, se usa la que pidio el usuario si existe y,
+     * si no, la que mas jornadas tiene. Las demas se ofrecen en el selector.
+     */
+    const cuentaPorUnidad = new Map<string, number>()
+    for (const r of todas) {
+      const u = r.actividad.unidadMedida
+      cuentaPorUnidad.set(u, (cuentaPorUnidad.get(u) ?? 0) + 1)
+    }
+    const unidades = [...cuentaPorUnidad.entries()]
+      .map(([unidad, registros]) => ({ unidad, registros }))
+      .sort((a, b) => b.registros - a.registros || a.unidad.localeCompare(b.unidad))
+
+    const pedida = parametros.get('unidad')
+    const unidad = unidades.some((u) => u.unidad === pedida)
+      ? (pedida as string)
+      : (unidades[0]?.unidad ?? pedida ?? 'm2')
+
+    const registros = todas.filter((r) => r.actividad.unidadMedida === unidad)
 
     /**
      * Las cadenas completas de las obras que aparecen en el periodo.
@@ -190,6 +219,8 @@ export async function GET(request: Request) {
       .sort((a, b) => (b.rendimiento ?? 0) - (a.rendimiento ?? 0))
 
     return ok({
+      unidad,
+      unidades,
       indicadores,
       // Sale de las cadenas completas: una obra terminada esta semana cuenta
       // aunque empezara el mes pasado.

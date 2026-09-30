@@ -1,7 +1,12 @@
 import { prisma } from '@/lib/prisma'
 import { ok, manejarError, exigirSesion, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
 import { esquemaTarea } from '@/lib/esquemas'
-import { relacionesTarea, validarCoherencia } from '@/lib/consultas'
+import {
+  relacionesTarea,
+  validarCoherencia,
+  validarTareaUnica,
+  exigirPrecioAcordado,
+} from '@/lib/consultas'
 
 type Contexto = { params: Promise<{ id: string }> }
 
@@ -27,6 +32,7 @@ export async function PUT(request: Request, { params }: Contexto) {
       select: {
         elementoId: true,
         actividadId: true,
+        trabajadorId: true,
         registro: { select: { codigoRegistro: true } },
       },
     })
@@ -53,6 +59,11 @@ export async function PUT(request: Request, { params }: Contexto) {
           `La obra ${actual.registro.codigoRegistro} ya nacio de esta tarea: el elemento y la actividad ya no se pueden cambiar aqui.`,
         )
       }
+    }
+
+    await validarTareaUnica(datos.elementoId, datos.actividadId, id)
+    if (datos.trabajadorId !== actual.trabajadorId || datos.actividadId !== actual.actividadId) {
+      await exigirPrecioAcordado(datos.trabajadorId, datos.actividadId)
     }
 
     await validarCoherencia({
