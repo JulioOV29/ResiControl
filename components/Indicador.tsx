@@ -1,24 +1,18 @@
 import { cn } from '@/lib/utils'
 
-/** Tono del chip que acompaña al numero. Nunca es el unico portador del dato. */
+/** Color del chip que acompana al numero. */
 export type TonoChip = 'neutro' | 'bueno' | 'aviso' | 'marca'
 
 const chips: Record<TonoChip, string> = {
   neutro: 'bg-obra-100 text-obra-600',
-  bueno: 'bg-emerald-50 text-emerald-700',
-  aviso: 'bg-acento-100 text-acento-800',
+  bueno: 'bg-menta-50 text-menta-700',
+  aviso: 'bg-acento-50 text-acento-700',
   marca: 'bg-marca-50 text-marca-700',
 }
 
 /**
- * Tarjeta de indicador.
- *
- * El numero es lo unico grande de la tarjeta; la etiqueta, la unidad y el pie
- * van pequeños a proposito, porque lo que se viene a leer es la cifra.
- *
- * La barra de progreso es opcional y solo tiene sentido cuando el valor es una
- * fraccion de algo, como el avance: ponerla debajo de un rendimiento en m2 por
- * hora no significaria nada, porque no hay un 100% contra el cual medirlo.
+ * Tarjeta de indicador: el numero grande, lo demas pequeno.
+ * La barra de progreso solo se usa para fracciones (como el avance).
  */
 export function Indicador({
   etiqueta,
@@ -33,29 +27,28 @@ export function Indicador({
   acento,
 }: {
   etiqueta: string
-  /** Segunda linea junto a la etiqueta: contra que se compara el numero. */
+  /** Linea bajo la etiqueta: contra que se compara. */
   sobretitulo?: string
   valor: string
   unidad?: string
   detalle?: string
-  /** Texto corto destacado en el pie: una variacion, un estado. */
+  /** Texto corto destacado en el pie. */
   chip?: string
   tonoChip?: TonoChip
-  /** Fraccion de 0 a 1. Dibuja la barra bajo el numero. */
+  /** Fraccion de 0 a 1 para la barra de progreso. */
   progreso?: number
   icono?: React.ComponentType<{ className?: string }>
-  /** Marca la tarjeta principal del grupo, solo en el icono. */
+  /** Resalta el icono de la tarjeta principal. */
   acento?: boolean
 }) {
   const relleno = progreso === undefined ? 0 : Math.max(0, Math.min(1, progreso)) * 100
 
   return (
-    // Columna con el pie empujado abajo: en una fila de tarjetas, una sin barra
-    // de progreso dejaba su pie a media altura y la fila se veia desalineada.
-    <div className="flex h-full flex-col rounded-xl border border-obra-200 bg-white p-4 shadow-sm sm:p-5">
+    // Columna con el pie abajo, para alinear tarjetas con y sin barra.
+    <div className="tarjeta flex h-full flex-col p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-obra-500">
+          <p className="hyphens-auto break-words text-[13px] font-semibold text-obra-800 sm:text-sm">
             {etiqueta}
           </p>
           {sobretitulo && <p className="mt-0.5 text-xs text-obra-400">{sobretitulo}</p>}
@@ -63,8 +56,8 @@ export function Indicador({
         {Icono && (
           <span
             className={cn(
-              'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
-              acento ? 'bg-marca-50 text-marca-600' : 'bg-obra-50 text-obra-400',
+              'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:h-9 sm:w-9',
+              acento ? 'bg-marca-600 text-white' : 'bg-marca-50 text-marca-600',
             )}
           >
             <Icono className="h-4 w-4" />
@@ -73,7 +66,7 @@ export function Indicador({
       </div>
 
       <p className="mt-3 flex items-baseline gap-1">
-        <span className="text-3xl font-semibold tracking-tight tabular-nums text-obra-900">
+        <span className="text-2xl font-semibold tracking-tight tabular-nums text-obra-900 sm:text-3xl">
           {valor}
         </span>
         {unidad && <span className="text-sm font-medium text-obra-400">{unidad}</span>}
@@ -81,11 +74,11 @@ export function Indicador({
 
       <div className="mt-auto">
         {progreso !== undefined && (
-          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-obra-100" aria-hidden>
+          <div className="mt-4 h-1 w-full overflow-hidden rounded-full bg-obra-100" aria-hidden>
             <div
               className={cn(
                 'h-full rounded-full',
-                relleno >= 100 ? 'bg-emerald-500' : 'bg-marca-600',
+                relleno >= 100 ? 'bg-menta-400' : 'bg-marca-500',
               )}
               style={{ width: `${relleno}%` }}
             />

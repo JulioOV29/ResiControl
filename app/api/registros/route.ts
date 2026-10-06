@@ -1,11 +1,11 @@
 import { prisma } from '@/lib/prisma'
-import { ok, manejarError, exigirSesion, exigirPermiso, ErrorApi } from '@/lib/api'
+import { fechaExiste } from '@/lib/dominio'
+import { ok, manejarError, exigirSesion, exigirPermiso, ErrorApi, sinPrecios } from '@/lib/api'
 import { esquemaRegistroObra, esquemaRegistroAvance } from '@/lib/esquemas'
 import {
   relacionesRegistro,
   filtroRegistros,
   camposIndicadores,
-  aHora,
   tarifaDeTrabajador,
   cantidadParaObra,
   validarObraUnica,
@@ -15,28 +15,19 @@ import {
   sincronizarEstadoTarea,
   tareaDeLaObra,
 } from '@/lib/consultas'
-import { agregarIndicadores, cantidadDeObra, claveDeObra, num } from '@/lib/calculos'
+import { agregarIndicadores, cantidadDeObra, claveDeObra, horaADate, num } from '@/lib/calculos'
 
-/**
- * Cuantas filas se mandan al navegador de una vez. La tabla no puede crecer sin
- * limite: con unos miles de registros la respuesta pesaria megabytes y el
- * navegador tardaria mas en pintarla que la base en calcularla.
- */
+/** Maximo de filas por respuesta. */
 const LIMITE = 500
 
 /**
- * La lista de registros y su resumen.
- *
- * El resumen NO sale de las filas que se devuelven, sino de todo lo que cumple
- * el filtro, con una consulta aparte que trae solo las columnas que entran en
- * las formulas. Si saliera de la pagina, al pasar de LIMITE el residente veria
- * una produccion menor que la real y sin ninguna senal de que falta algo.
- * De paso es mas barato: antes el navegador recibia todas las relaciones de
- * todas las filas para acabar sumando dos columnas.
+ * Lista de registros y su resumen.
+ * El resumen se calcula sobre TODO lo que cumple el filtro, no solo sobre las
+ * filas devueltas.
  */
 export async function GET(request: Request) {
   try {
-    await exigirSesion()
+    const sesion = await exigirSesion()
     const parametros = new URL(request.url).searchParams
     const where = filtroRegistros(parametros)
 
@@ -53,11 +44,10 @@ export async function GET(request: Request) {
       }),
     ])
 
-    // El estado de cada obra (area, pendiente, avance) sale de su cadena
-    // completa, no solo de las jornadas que caen dentro del filtro: lo que le
-    // falta a un muro no cambia porque se acote el rango de fechas.
+    // Avance y pendiente salen de la cadena completa de cada obra.
     const clavesDeObra = [...new Set(paraResumen.map(claveDeObra))]
-    const hasta = parametros.get('hasta')
+    const hastaTexto = parametros.get('hasta')
+    const hasta = hastaTexto && fechaExiste(hastaTexto) ? hastaTexto : null
     const cadenas = clavesDeObra.length
       ? await prisma.registroEjecucion.findMany({
           where: {
@@ -71,12 +61,7 @@ export async function GET(request: Request) {
         })
       : []
 
-    /**
-     * Un resumen por unidad de medida. Sumar m2 de pañete con metros lineales
-     * de filo y con tomacorrientes da un numero que no es nada, asi que cada
-     * unidad lleva sus propios indicadores. Van de la que mas jornadas tiene a
-     * la que menos, y la pantalla muestra la primera mientras no se elija otra.
-     */
+    /** Un resumen por unidad de medida, de la que mas jornadas tiene a la que menos. */
     const porUnidad = new Map<string, typeof paraResumen>()
     for (const r of paraResumen) {
       const unidad = r.actividad.unidadMedida
@@ -99,7 +84,7 @@ export async function GET(request: Request) {
       .sort((a, b) => b.registros - a.registros)
 
     return ok({
-      registros,
+      registros: sinPrecios(registros, sesion.user.rol),
       resumenes,
       truncado: paraResumen.length > registros.length,
     })
@@ -108,11 +93,7 @@ export async function GET(request: Request) {
   }
 }
 
-/**
- * Codigo de una obra nueva: R01, R02... Solo cuentan los registros que abren
- * obra, y se toma el maximo existente en lugar de contar filas, para que
- * borrar un registro no genere codigos repetidos.
- */
+/** Codigo de obra nueva (R01, R02...), a partir del mayor existente. */
 async function siguienteCodigoDeObra() {
   const aperturas = await prisma.registroEjecucion.findMany({
     where: { registroOrigenId: null },
@@ -128,9 +109,9 @@ async function siguienteCodigoDeObra() {
 }
 
 /**
- * Crea un registro. El cuerpo decide de que tipo es:
- *   con registroAnteriorId  -> avance de una obra ya abierta
- *   sin el                  -> registro que abre una obra nueva
+ * Crea un registro:
+ *   con registroAnteriorId -> avance de una obra
+ *   sin el                 -> apertura de una obra nueva
  */
 export async function POST(request: Request) {
   try {
@@ -139,21 +120,31 @@ export async function POST(request: Request) {
     const esAvance = Boolean(cuerpo?.registroAnteriorId)
 
     if (!esAvance) {
-      const { horaInicio, horaFinal, tareaId, cantidadTotal, ...datos } =
+      const { horaInicio, horaFinal, tareaId: tareaElegida, cantidadTotal, ...datos } =
         esquemaRegistroObra.parse(cuerpo)
 
       await validarCoherencia(datos)
-      // Sin precio acordado no se asigna: el trabajo quedaria sin poder pagarse.
       await exigirPrecioAcordado(datos.trabajadorId, datos.actividadId)
-      // Un muro con una actividad es UNA obra: el segundo dia es un avance.
       await validarObraUnica(datos.elementoId, datos.actividadId)
-      // Si la obra nace de una tarea asignada, esa tarea tiene que estar libre
-      // y hablar del mismo elemento y la misma actividad.
+
+      // Si no se eligio tarea pero ese trabajo ya tiene una, la obra se enlaza a ella.
+      const tareaId =
+        tareaElegida ??
+        (
+          await prisma.tarea.findFirst({
+            where: {
+              elementoId: datos.elementoId,
+              actividadId: datos.actividadId,
+              registro: { is: null },
+            },
+            select: { id: true },
+          })
+        )?.id ??
+        null
+      // Si nace de una tarea, la tarea debe estar libre y coincidir.
       if (tareaId) await validarTareaParaObra(tareaId, datos)
 
-      // Las medidas salen del elemento constructivo, no del navegador, y se
-      // copian a la jornada junto con la cantidad total, que es lo que fija el
-      // 100% de esta obra en la unidad de su actividad.
+      // Medidas y cantidad total salen del elemento, no del navegador.
       const medidas = await cantidadParaObra(datos.elementoId, datos.actividadId, cantidadTotal)
 
       if (datos.m2Ejecutados > medidas.cantidad + 0.005) {
@@ -165,8 +156,6 @@ export async function POST(request: Request) {
 
       const [codigoRegistro, valorM2] = await Promise.all([
         siguienteCodigoDeObra(),
-        // El precio es el del trabajador para esa actividad, no el de la
-        // actividad: el mismo pañete se paga distinto segun quien lo haga.
         tarifaDeTrabajador(datos.trabajadorId, datos.actividadId),
       ])
 
@@ -178,17 +167,16 @@ export async function POST(request: Request) {
           cantidadTotal: medidas.cantidad,
           tareaId,
           codigoRegistro,
-          // La tarifa queda congelada en la jornada, como la meta.
+          // Precio copiado en la jornada.
           valorM2,
-          horaInicio: aHora(horaInicio),
-          horaFinal: aHora(horaFinal),
+          horaInicio: horaADate(horaInicio),
+          horaFinal: horaADate(horaFinal),
           usuarioRegistraId: sesion.user.id,
         },
         include: relacionesRegistro,
       })
 
-      // La tarea pasa a EN_PROCESO sola, o a TERMINADO si la obra se cerro el
-      // mismo dia que se abrio.
+      // Actualiza el estado de la tarea.
       await sincronizarEstadoTarea(tareaId)
 
       return ok(creado, 201)
@@ -212,7 +200,7 @@ export async function POST(request: Request) {
     })
     if (!anterior) throw new ErrorApi(404, 'El registro anterior no existe')
 
-    // La cadena es lineal: cada registro tiene como mucho un avance detras.
+    // Un registro tiene como maximo un avance despues.
     if (anterior.continuacion) {
       throw new ErrorApi(
         409,
@@ -224,34 +212,27 @@ export async function POST(request: Request) {
       throw new ErrorApi(409, 'El avance no puede ser anterior al registro que continua')
     }
 
-    // La obra es la del registro que la abrio, que puede ser el anterior mismo.
+    // Obra a la que pertenece (la apertura).
     const raizId = anterior.registroOrigenId ?? anterior.id
 
     await validarCoherencia({
-      // La ubicacion y la actividad las hereda del anterior.
+      // Ubicacion heredada del anterior.
       elementoId: anterior.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
       fechaEjecucion: datos.fechaEjecucion,
     })
 
-    // La actividad es la de la obra: quien trabaja hoy tiene que tener precio
-    // acordado para ella.
+    // El trabajador debe tener precio para la actividad de la obra.
     await exigirPrecioAcordado(datos.trabajadorId, anterior.actividadId)
 
     const codigoObra = anterior.registroOrigen?.codigoRegistro ?? anterior.codigoRegistro
-    // La actividad la hereda del anterior; el precio sale del trabajador de
-    // ESTA jornada y de lo que valia hoy, no de quien abrio la obra ni de lo
-    // que valia entonces.
+    // Precio del trabajador de esta jornada, con el valor de hoy.
     const valorM2 = await tarifaDeTrabajador(datos.trabajadorId, anterior.actividadId)
 
     /**
-     * Lo que queda por ejecutar se vuelve a medir DENTRO de la transaccion, con
-     * la fila de la obra bloqueada.
-     *
-     * Comprobar fuera y crear despues dejaba una ventana: dos avances guardados
-     * a la vez leian el mismo pendiente y la obra acababa por encima del 100%.
-     * El bloqueo tambien sirve para que el numero de subregistro no se repita.
+     * El pendiente se mide dentro de la transaccion con la obra bloqueada,
+     * para que dos avances simultaneos no pasen del 100% ni repitan numero.
      */
     const creado = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id_ejecucion FROM registros_ejecucion WHERE id_ejecucion = ${raizId} FOR UPDATE`
@@ -282,8 +263,7 @@ export async function POST(request: Request) {
         )
       }
 
-      // El subregistro se identifica con el codigo de su obra mas su numero:
-      // R40-SR1, R40-SR2. En pantalla se muestra partido en dos columnas.
+      // Codigo del avance: R40-SR1, R40-SR2...
       const numeroAvance =
         Math.max(0, ...raiz.avances.map((a) => a.numeroAvance ?? 0)) + 1
 
@@ -291,16 +271,15 @@ export async function POST(request: Request) {
         data: {
           ...datos,
           valorM2,
-          // La ubicacion y la actividad se heredan: un avance pertenece a la
-          // misma obra, no puede cambiar de muro ni de actividad a mitad.
+          // Elemento y actividad se heredan de la obra.
           elementoId: anterior.elementoId,
           actividadId: anterior.actividadId,
           registroAnteriorId: anterior.id,
           registroOrigenId: raizId,
           numeroAvance,
           codigoRegistro: `${codigoObra}-SR${numeroAvance}`,
-          horaInicio: aHora(horaInicio),
-          horaFinal: aHora(horaFinal),
+          horaInicio: horaADate(horaInicio),
+          horaFinal: horaADate(horaFinal),
           usuarioRegistraId: sesion.user.id,
         },
         include: relacionesRegistro,

@@ -25,7 +25,8 @@ export default function TrabajadoresPage() {
 
   const abrirNuevo = () => setForm({ abierto: true, registro: null })
 
-  const columnas: Columna<Trabajador>[] = [
+  const columnas: Columna<Trabajador>[] = (
+    [
     {
       clave: 'nombre',
       titulo: 'Trabajador',
@@ -45,8 +46,7 @@ export default function TrabajadoresPage() {
         t.asignaciones?.[0]?.cuadrilla.nombre ?? <span className="text-obra-400">Sin asignar</span>,
     },
     {
-      // Los precios se acuerdan con la persona, asi que se ven desde su ficha:
-      // aqui basta con saber cuantas actividades tiene acordadas y a cuanto.
+      // Resumen de precios; el detalle esta en la ficha.
       clave: 'precios',
       titulo: 'Precios',
       soloEscritorio: true,
@@ -72,7 +72,9 @@ export default function TrabajadoresPage() {
         <Insignia tono={t.activo ? 'exito' : 'neutro'}>{t.activo ? 'Activo' : 'Inactivo'}</Insignia>
       ),
     },
-  ]
+    ] as Columna<Trabajador>[]
+    // Los precios solo los ve quien liquida.
+  ).filter((c) => c.clave !== 'precios' || puede.liquidar)
 
   return (
     <div>

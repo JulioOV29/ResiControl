@@ -1,10 +1,10 @@
 import { prisma } from '@/lib/prisma'
+import { fechaDeHoy, fechaExiste } from '@/lib/dominio'
 import { ok, manejarError, exigirSesion } from '@/lib/api'
 
 /**
- * Meta aplicable a un registro concreto. Busca primero la meta especifica del
- * cargo y, si no hay, la general de la actividad. Sirve para que el formulario
- * proponga los m2 meta sin que el residente los tenga que recordar.
+ * Meta vigente para un registro: primero la del cargo, si no la general.
+ * El formulario la usa para proponer la meta del dia.
  */
 export async function GET(request: Request) {
   try {
@@ -18,7 +18,9 @@ export async function GET(request: Request) {
 
     if (!proyectoId || !actividadId) return ok(null)
 
-    const fecha = fechaTexto ? new Date(`${fechaTexto}T00:00:00.000Z`) : new Date()
+    // Sin fecha (o mal escrita) se usa hoy en Colombia, como se guardan las fechas.
+    const fecha =
+      fechaTexto && fechaExiste(fechaTexto) ? new Date(`${fechaTexto}T00:00:00.000Z`) : fechaDeHoy()
 
     const vigencia = {
       vigenciaDesde: { lte: fecha },
@@ -27,7 +29,8 @@ export async function GET(request: Request) {
 
     const especifica = cargoId
       ? await prisma.meta.findFirst({
-          where: { proyectoId, actividadId, cargoId, ...vigencia },
+          // Solo si trae m2 objetivo; si no, se usa la meta general.
+          where: { proyectoId, actividadId, cargoId, m2Objetivo: { not: null }, ...vigencia },
           orderBy: { vigenciaDesde: 'desc' },
         })
       : null

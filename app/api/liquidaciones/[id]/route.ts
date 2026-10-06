@@ -5,7 +5,7 @@ import { num } from '@/lib/calculos'
 
 type Contexto = { params: Promise<{ id: string }> }
 
-/** Una liquidacion con sus renglones y las jornadas que pago. */
+/** Liquidacion con sus renglones y jornadas pagadas. */
 export async function GET(_request: Request, { params }: Contexto) {
   try {
     await exigirPermiso('liquidar')
@@ -50,10 +50,7 @@ export async function GET(_request: Request, { params }: Contexto) {
   }
 }
 
-/**
- * Anula una liquidacion: sus jornadas vuelven a quedar pendientes de pago.
- * Solo el administrador, porque deshace un pago que ya pudo haberse hecho.
- */
+/** Anula una liquidacion: sus jornadas vuelven a quedar pendientes. Solo ADMIN. */
 export async function DELETE(_request: Request, { params }: Contexto) {
   try {
     await exigirPermiso('administrar')

@@ -8,7 +8,6 @@ import {
   Building2,
   ClipboardCheck,
   ClipboardList,
-  FileBarChart,
   HardHat,
   LayoutDashboard,
   ListChecks,
@@ -47,7 +46,6 @@ const navegacion: GrupoNav[] = [
         icono: Wallet,
         roles: ['ADMIN', 'RESIDENTE'],
       },
-      { href: '/informes', etiqueta: 'Informes', icono: FileBarChart },
     ],
   },
   {
@@ -67,7 +65,7 @@ const navegacion: GrupoNav[] = [
   },
 ]
 
-/** El rol en corto: la descripcion larga de lib/dominio no cabe bajo el nombre. */
+/** Nombre corto del rol. */
 const cargoCorto = (rol: RolUsuario) => ETIQUETA_ROL[rol].split(':')[0]
 
 export default function AppShell({
@@ -89,9 +87,15 @@ export default function AppShell({
 
   const iniciales = `${usuario.nombre[0] ?? ''}${usuario.apellido[0] ?? ''}`.toUpperCase()
 
+  /** Seccion actual, para el titulo de la barra superior. */
+  const seccion = grupos
+    .flatMap((g) => g.items)
+    .find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
+  const IconoSeccion = seccion?.icono
+
   return (
     <div className="min-h-screen bg-obra-50 lg:flex">
-      {/* Fondo oscuro al abrir el menu en movil */}
+      {/* Fondo oscuro del menu en movil */}
       {abierto && (
         <div
           className="fixed inset-0 z-40 bg-obra-900/40 lg:hidden"
@@ -102,10 +106,12 @@ export default function AppShell({
 
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-obra-200 bg-white',
+          'fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-obra-100 bg-white',
           'transform transition-transform duration-300 ease-in-out',
           abierto ? 'translate-x-0' : '-translate-x-full',
-          'lg:static lg:z-auto lg:translate-x-0',
+          // En escritorio el menu queda fijo a la izquierda: no se mueve con el scroll.
+          // Si no cabe, se desplaza solo la lista de opciones.
+          'lg:sticky lg:top-0 lg:z-auto lg:h-screen lg:shrink-0 lg:translate-x-0',
         )}
       >
         <div className="flex items-center justify-between px-5 py-5">
@@ -114,16 +120,14 @@ export default function AppShell({
             className="flex items-center gap-2.5"
             onClick={() => setAbierto(false)}
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-obra-900">
-              <HardHat className="h-[18px] w-[18px] text-acento-400" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-marca-600 shadow-sm shadow-marca-600/30">
+              <HardHat className="h-5 w-5 text-white" />
             </div>
             <span className="leading-tight">
-              <span className="block text-sm font-bold tracking-tight text-obra-900">
-                RESICONTROL
+              <span className="block text-[15px] font-bold tracking-tight text-obra-900">
+                ResiControl
               </span>
-              <span className="block text-[10px] font-medium uppercase tracking-wider text-obra-400">
-                Control de obras
-              </span>
+              <span className="block text-xs text-obra-400">Control de obras</span>
             </span>
           </Link>
           <button
@@ -135,10 +139,19 @@ export default function AppShell({
           </button>
         </div>
 
-        <nav className="flex-1 space-y-6 overflow-y-auto px-3 pb-6">
+        {/* Saludo */}
+        <div className="mx-4 mb-5 rounded-xl bg-obra-50 px-4 py-3">
+          <p className="text-xs text-obra-500">Hola,</p>
+          <p className="truncate text-sm font-semibold text-obra-900">
+            {usuario.nombre} {usuario.apellido}
+          </p>
+          <p className="text-xs text-marca-700">{cargoCorto(usuario.rol)}</p>
+        </div>
+
+        <nav className="flex-1 space-y-5 overflow-y-auto px-3 pb-6">
           {grupos.map((grupo) => (
             <div key={grupo.titulo}>
-              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-obra-400">
+              <p className="px-3 pb-1.5 text-xs font-medium text-obra-400">
                 {grupo.titulo}
               </p>
               <ul className="space-y-0.5">
@@ -152,12 +165,11 @@ export default function AppShell({
                         onClick={() => setAbierto(false)}
                         aria-current={activo ? 'page' : undefined}
                         className={cn(
-                          'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-                          // El texto activo va en marca-700 y no en 600: sobre el
-                          // fondo claro de la pastilla, el 600 se queda corto de
-                          // contraste para texto.
+                          'relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                          // marca-700 para tener buen contraste sobre el fondo claro.
+                          // La barrita de la izquierda marca la pagina actual.
                           activo
-                            ? 'bg-marca-50 font-semibold text-marca-700'
+                            ? 'bg-marca-50 font-semibold text-marca-700 before:absolute before:-left-3 before:top-1.5 before:bottom-1.5 before:w-1 before:rounded-r-full before:bg-marca-600'
                             : 'text-obra-600 hover:bg-obra-50 hover:text-obra-900',
                         )}
                       >
@@ -179,7 +191,7 @@ export default function AppShell({
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-obra-200 bg-white px-4 sm:px-6">
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-obra-100 bg-white/85 px-4 backdrop-blur sm:px-6 lg:px-8">
           <button
             onClick={() => setAbierto(true)}
             className="-ml-1 rounded-lg p-2 text-obra-600 hover:bg-obra-100 lg:hidden"
@@ -188,11 +200,19 @@ export default function AppShell({
             <Menu className="h-5 w-5" />
           </button>
 
-          <span className="font-semibold text-obra-900 lg:hidden">ResiControl</span>
+          {/* Seccion actual */}
+          <div className="flex min-w-0 items-center gap-2.5">
+            {IconoSeccion && (
+              <span className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-obra-50 text-obra-500 sm:flex">
+                <IconoSeccion className="h-4 w-4" />
+              </span>
+            )}
+            <span className="truncate font-semibold text-obra-900">
+              {seccion?.etiqueta ?? 'ResiControl'}
+            </span>
+          </div>
 
-          {/* El bloque de usuario vive aqui y ya no al pie del menu, como en el
-              diseno: es lo primero que se mira para saber con que cuenta se
-              esta trabajando. */}
+          {/* Usuario conectado */}
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden text-right leading-tight sm:block">
               <p className="text-sm font-semibold text-obra-900">
@@ -200,7 +220,7 @@ export default function AppShell({
               </p>
               <p className="text-xs text-obra-500">{cargoCorto(usuario.rol)}</p>
             </div>
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-obra-100 text-xs font-semibold text-obra-700">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-marca-100 text-xs font-semibold text-marca-700 ring-2 ring-white">
               {iniciales}
             </div>
             <button

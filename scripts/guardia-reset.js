@@ -1,15 +1,11 @@
 /**
- * Guardia de los comandos que borran la base.
+ * Proteccion de los comandos que borran la base:
  *
- *   npm run rehacer      reconstruye el esquema desde cero
- *   npm run db:reset     lo mismo, sin sembrar ni importar
+ *   npm run rehacer    reconstruye todo desde cero
+ *   npm run db:reset   lo mismo, sin datos iniciales
  *
- * Los dos empiezan por "prisma db push --force-reset", que tira todas las
- * tablas. Una vez se perdio informacion real por correrlos sin pensar, asi que
- * ahora hay que pedirlo dos veces: con la variable CONFIRMO_BORRAR=SI.
- *
- * Y antes de borrar nada, este guardia hace un respaldo. Si el respaldo falla,
- * el borrado no ocurre.
+ * Exige CONFIRMO_BORRAR=SI y hace un respaldo antes. Si el respaldo falla,
+ * no se borra nada.
  */
 const { execFileSync } = require('child_process')
 const path = require('path')

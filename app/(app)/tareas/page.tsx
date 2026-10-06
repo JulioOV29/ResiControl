@@ -18,16 +18,20 @@ import { formatoFecha, formatoNumero, formatoPorcentaje } from '@/lib/utils'
 import type { Catalogos, EstadoEjecucion, Tarea } from '@/types/dominio'
 
 /**
- * Como va la tarea: lo ejecutado de su obra sobre la cantidad total de esa
- * obra, en la unidad de su actividad. Antes de abrirse la obra, la cantidad
- * sale del elemento cuando la unidad lo permite (m2, ml); en und, m3 o kg no se
- * sabe hasta que el residente la escribe al abrirla.
+ * Avance de la tarea: ejecutado de su obra / cantidad total.
+ * Sin obra, la cantidad sale del elemento (m2, ml); en und, m3 o kg se conoce
+ * al abrir la obra.
  */
 function avanceDe(t: Tarea) {
   const unidad = t.actividad?.unidadMedida ?? 'm2'
   const total =
     t.registro?.cantidadTotal ??
-    cantidadDelElemento(unidad, t.elemento?.largo ?? 0, t.elemento?.alto ?? 0) ??
+    cantidadDelElemento(
+      unidad,
+      t.elemento?.largo ?? 0,
+      t.elemento?.alto ?? 0,
+      t.elemento?.areaVanos ?? 0,
+    ) ??
     0
   const ejecutado = t.registro
     ? t.registro.m2Ejecutados + t.registro.avances.reduce((s, a) => s + a.m2Ejecutados, 0)

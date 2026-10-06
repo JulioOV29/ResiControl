@@ -1,32 +1,37 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, XCircle } from 'lucide-react'
 import { Modal } from '@/components/ui/modal'
 import { enviar, mapaDeErrores } from '@/lib/cliente'
 import { Boton } from '@/components/ui/button'
 
 /**
- * Estado compartido por todos los formularios: envio en curso, error general y
- * errores por campo tal como los devuelve la validacion del servidor.
+ * Estado comun de los formularios: envio, error general y errores por campo.
+ * `abierto`: al abrir el formulario se borran los errores de la vez anterior.
  */
-export function useEnvio() {
+export function useEnvio(abierto?: boolean) {
   const [enviando, setEnviando] = useState(false)
   const [errorGeneral, setErrorGeneral] = useState('')
   const [errores, setErrores] = useState<Record<string, string>>({})
   /**
-   * Rechazos que no son un campo mal llenado sino una regla que impide guardar
-   * (por ejemplo, un trabajador sin precio acordado). Se muestran en una
-   * ventana de error encima del formulario, no como un aviso mas.
+   * Errores que impiden guardar (ej. trabajador sin precio): se muestran en
+   * una ventana de error encima del formulario.
    */
   const [ventanaError, setVentanaError] = useState('')
+
+  useEffect(() => {
+    if (!abierto) return
+    setErrorGeneral('')
+    setErrores({})
+    setVentanaError('')
+  }, [abierto])
 
   const guardar = async (
     url: string,
     metodo: 'POST' | 'PUT',
     datos: unknown,
-    // Recibe lo que devolvio el servidor, para que la pantalla pueda pintar la
-    // fila nueva sin esperar a recargar la lista entera.
+    // Recibe lo que devolvio el servidor.
     onExito: (creado: unknown) => void,
   ) => {
     setEnviando(true)
@@ -57,11 +62,7 @@ export function useEnvio() {
   }
 }
 
-/**
- * Ventana de error encima del formulario: la regla que impide guardar, con una
- * X roja para que no se confunda con un aviso. El formulario queda detras tal
- * como estaba, para corregir y volver a intentar.
- */
+/** Ventana de error con una X roja, encima del formulario. */
 export function VentanaError({
   mensaje,
   titulo = 'No se puede guardar',
@@ -96,12 +97,8 @@ export function AvisoError({ mensaje }: { mensaje: string }) {
 }
 
 /**
- * Cabecera de un formulario que se llena por pasos.
- *
- * Existe porque estos formularios tienen dos mitades con naturalezas distintas:
- * primero se decide QUE se va a hacer y DONDE, y de esa decision depende como
- * se pide el resto (la unidad de medida sale de la actividad). Mostrarlo todo
- * de una vez obligaba a pedir "m2" antes de saber si el trabajo se mide en m2.
+ * Indicador de pasos de un formulario.
+ * Primero se elige que y donde; de eso depende el resto (por ejemplo, la unidad).
  */
 export function Pasos({ actual, titulos }: { actual: number; titulos: string[] }) {
   return (
@@ -132,10 +129,7 @@ export function Pasos({ actual, titulos }: { actual: number; titulos: string[] }
   )
 }
 
-/**
- * Pie de un formulario por pasos: en el primero ofrece Cancelar y Siguiente; en
- * el ultimo, Atras y Guardar.
- */
+/** Pie de formulario por pasos: Cancelar/Siguiente y luego Atras/Guardar. */
 export function PiePasos({
   paso,
   total,
@@ -150,7 +144,7 @@ export function PiePasos({
   paso: number
   total: number
   enviando: boolean
-  /** Falso mientras falte algo del paso actual: el boton Siguiente espera. */
+  /** false mientras falte algo del paso actual. */
   puedeSeguir?: boolean
   onCancelar: () => void
   onAtras: () => void
@@ -174,12 +168,8 @@ export function PiePasos({
         </Boton>
 
         {/*
-          Las claves distintas no son decorativas: sin ellas React ve dos veces
-          el mismo <Boton> en la misma posicion y reaprovecha el nodo del DOM,
-          cambiandole el type de "button" a "submit". El navegador todavia tiene
-          ese clic entre manos, ve un boton de envio y guarda el formulario a
-          medio llenar. Con claves distintas se desmonta uno y se monta el otro,
-          asi que el boton pulsado sigue siendo el de "Siguiente".
+          Las keys distintas evitan que React reutilice el boton y lo convierta en
+          submit a mitad del clic (guardaria el formulario incompleto).
         */}
         {ultimo ? (
           <Boton key="guardar" type="submit" disabled={enviando}>
@@ -205,8 +195,7 @@ export function PieFormulario({
   enviando: boolean
   onCancelar: () => void
   textoGuardar?: string
-  /** El mismo error de arriba, repetido junto al boton: en un formulario largo
-   *  el aviso de la cabecera queda fuera de pantalla y parece que no paso nada. */
+  /** El error se repite junto al boton para que se vea en formularios largos. */
   error?: string
 }) {
   return (

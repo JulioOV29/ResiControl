@@ -13,16 +13,10 @@ import { Insignia } from '@/components/ui/badge'
 import { FormLiquidacion } from '@/components/formularios/FormLiquidacion'
 import { DetalleLiquidacion, textoCuenta } from '@/components/DetalleLiquidacion'
 import { ETIQUETA_PERIODO } from '@/lib/dominio'
-import { formatoFecha, formatoMoneda } from '@/lib/utils'
+import { formatoFecha, formatoMoneda, formatoMomento } from '@/lib/utils'
 import type { Catalogos, Liquidacion } from '@/types/dominio'
 
-/**
- * Liquidaciones: los pagos a los trabajadores por lo que ejecutaron.
- *
- * Cada una paga las jornadas de un trabajador en un lapso a los precios que
- * quedaron congelados en ellas, y las marca como pagadas para que no se paguen
- * dos veces.
- */
+/** Liquidaciones: pagos a los trabajadores por lo que ejecutaron en un lapso. */
 export default function LiquidacionesPage() {
   const puede = usePuede()
   const [trabajadorId, setTrabajadorId] = useState('')
@@ -42,7 +36,7 @@ export default function LiquidacionesPage() {
       render: (l) => (
         <div>
           <div className="font-medium text-obra-900">{l.codigo}</div>
-          <div className="text-xs text-obra-400">{formatoFecha(l.createdAt)}</div>
+          <div className="text-xs text-obra-400">{formatoMomento(l.createdAt)}</div>
         </div>
       ),
     },
@@ -166,7 +160,7 @@ export default function LiquidacionesPage() {
         onGuardado={(creada) => {
           setFormAbierto(false)
           recargar()
-          // Recien creada se abre su detalle: es el comprobante de lo que se pago.
+          // Al crearla se abre su comprobante.
           setDetalle(creada.id)
         }}
       />

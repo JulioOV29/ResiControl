@@ -1,24 +1,12 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { formatoNumero } from '@/lib/utils'
+import { formatoNumero, hoyTexto } from '@/lib/utils'
 
 /**
- * Calendario de registros: el mes como cuadricula compacta, con un solo color
- * para los dias que tienen registros.
- *
- * Responde de un vistazo la pregunta que una grafica de barras no responde
- * bien: que dias se trabajo y cuales quedaron en blanco. Los huecos son tan
- * informativos como los picos, y en una barra un dia sin trabajo simplemente no
- * existe.
- *
- * Un solo color a proposito: aqui lo que importa es si hubo o no hubo trabajo.
- * Cuanto se hizo cada dia asoma en el globo al pasar el cursor, y al pulsar un
- * dia se abre su informe completo en la mitad derecha de la tarjeta.
- *
- * Se alimenta de los mismos dias que ya calcula el panel, asi que no le pide
- * nada nuevo a la base.
+ * Calendario del mes: marca los dias con registros.
+ * Al pasar el cursor muestra un resumen; al pulsar abre el informe del dia.
  */
 
 type Dia = {
@@ -46,7 +34,7 @@ const MESES = [
   'diciembre',
 ]
 
-/** Las fechas se manejan en UTC, igual que en el resto del sistema. */
+/** Fechas en UTC, como en el resto del sistema. */
 const clave = (anio: number, mes: number, dia: number) =>
   `${anio}-${String(mes + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}`
 
@@ -57,21 +45,26 @@ export function CalendarioRegistros({
   unidad = 'm2',
 }: {
   dias: Dia[]
-  /** La unidad en que mide el panel: m2, ml, und... */
+  /** Unidad del panel: m2, ml, und... */
   unidad?: string
-  /** El dia abierto en el informe de al lado. */
+  /** Dia abierto en el informe. */
   seleccionada: string | null
   onSeleccionar: (fecha: string) => void
 }) {
   const porFecha = useMemo(() => new Map(dias.map((d) => [d.fecha, d])), [dias])
 
-  // El mes que se abre primero es el del ultimo dia con trabajo: es donde esta
-  // mirando el residente, no el mes corriente del calendario.
+  // Abre en el mes del ultimo dia con trabajo.
   const ultimo = dias.length ? dias[dias.length - 1].fecha : null
-  const inicial = ultimo ? ultimo.slice(0, 7) : new Date().toISOString().slice(0, 7)
+  // Sin datos, el mes de hoy en hora local (no UTC).
+  const inicial = ultimo ? ultimo.slice(0, 7) : hoyTexto().slice(0, 7)
   const [mesVisible, setMesVisible] = useState(inicial)
 
-  /** El dia sobre el que esta el cursor, con su posicion para el globo. */
+  // Si cambia el periodo del panel, el calendario salta al mes del ultimo dia con trabajo.
+  useEffect(() => {
+    setMesVisible(inicial)
+  }, [inicial])
+
+  /** Dia bajo el cursor y posicion del globo. */
   const [encima, setEncima] = useState<{ dato: Dia; x: number; y: number } | null>(null)
 
   const [anio, mes] = mesVisible.split('-').map(Number)
@@ -83,7 +76,7 @@ export function CalendarioRegistros({
     setEncima(null)
   }
 
-  // Lunes primero: getUTCDay da 0 para domingo.
+  // Semana desde el lunes (getUTCDay da 0 para domingo).
   const primerDia = new Date(Date.UTC(anio, mesIndice, 1)).getUTCDay()
   const huecoInicial = (primerDia + 6) % 7
   const totalDias = new Date(Date.UTC(anio, mesIndice + 1, 0)).getUTCDate()
@@ -99,7 +92,7 @@ export function CalendarioRegistros({
   const delMes = celdas.filter((c) => c?.dato).map((c) => c!.dato!)
   const m2DelMes = delMes.reduce((suma, d) => suma + d.m2Ejecutados, 0)
 
-  /** Guarda el dia y donde dibujar el globo, en coordenadas de la cuadricula. */
+  /** Guarda el dia y la posicion del globo. */
   const mostrar = (dato: Dia, elemento: HTMLElement) =>
     setEncima({
       dato,
@@ -143,7 +136,7 @@ export function CalendarioRegistros({
         ))}
       </div>
 
-      {/* relative: el globo se posiciona dentro de esta cuadricula */}
+      {/* relative: el globo se posiciona dentro de la cuadricula */}
       <div className="relative mt-1 grid grid-cols-7 gap-1" onMouseLeave={() => setEncima(null)}>
         {celdas.map((celda, i) => {
           if (!celda) return <div key={`hueco-${i}`} className="h-8" />
@@ -155,14 +148,12 @@ export function CalendarioRegistros({
           return (
             <div
               key={celda.fecha}
-              // El foco por teclado abre el mismo globo que el cursor, y en
-              // pantalla tactil lo abre el toque.
+              // Teclado y toque tambien muestran el globo.
               tabIndex={dato ? 0 : -1}
               onMouseEnter={(e) => dato && mostrar(dato, e.currentTarget)}
               onFocus={(e) => dato && mostrar(dato, e.currentTarget)}
               onBlur={() => setEncima(null)}
-              // El clic abre el informe del dia en la mitad derecha; el cursor
-              // por encima solo asoma el resumen, sin cambiar lo que se ve.
+              // El clic abre el informe; el cursor solo muestra el resumen.
               onClick={() => dato && onSeleccionar(celda.fecha)}
               onKeyDown={(e) => {
                 if (dato && (e.key === 'Enter' || e.key === ' ')) {

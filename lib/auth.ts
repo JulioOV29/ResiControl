@@ -5,11 +5,8 @@ import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 
 /**
- * Cuantos intentos fallidos seguidos se admiten y cuanto dura el bloqueo.
- *
- * El contador vive en la base (columnas intentos_fallidos y bloqueado_hasta):
- * en Vercel cada peticion puede caer en una instancia distinta, asi que un
- * contador en memoria no frenaria a nadie.
+ * Intentos fallidos permitidos y minutos de bloqueo.
+ * El contador se guarda en la base porque en Vercel no hay memoria compartida.
  */
 const INTENTOS_MAXIMOS = 5
 const BLOQUEO_MINUTOS = 15
@@ -33,19 +30,10 @@ export const authOptions: NextAuthOptions = {
           where: { email: credentials.email.trim().toLowerCase() },
         })
 
-        // Cuenta inexistente o desactivada: se responde igual que una
-        // contrasena incorrecta para no revelar que correos existen.
+        // Cuenta inexistente o inactiva: misma respuesta que clave incorrecta.
         if (!usuario || !usuario.activo) return null
 
-        /**
-         * Cuenta bloqueada: se avisa con todas las letras y ni se comprueba la
-         * contrasena, para que el bloqueo sirva de algo.
-         *
-         * El aviso dice que ESE correo esta bloqueado, asi que le confirma a
-         * quien pregunte que la cuenta existe. Se acepta a conciencia: es un
-         * sistema interno de obra, y un residente que no entiende por que no
-         * entra con su clave buena cuesta mas que ese dato.
-         */
+        /** Cuenta bloqueada: se avisa sin revisar la contrasena. */
         if (usuario.bloqueadoHasta && usuario.bloqueadoHasta > new Date()) {
           const minutos = Math.max(
             1,
@@ -59,22 +47,24 @@ export const authOptions: NextAuthOptions = {
         const valida = await bcrypt.compare(credentials.password, usuario.passwordHash)
 
         if (!valida) {
-          const fallidos = usuario.intentosFallidos + 1
-          const bloquear = fallidos >= INTENTOS_MAXIMOS
-          await prisma.usuario.update({
+          // Suma en la base (no en memoria): intentos en paralelo cuentan todos.
+          const { intentosFallidos } = await prisma.usuario.update({
             where: { id: usuario.id },
-            data: {
-              // Al bloquear, el contador vuelve a cero: lo que cuenta a partir
-              // de ahi es la fecha de desbloqueo.
-              intentosFallidos: bloquear ? 0 : fallidos,
-              bloqueadoHasta: bloquear
-                ? new Date(Date.now() + BLOQUEO_MINUTOS * 60_000)
-                : null,
-            },
+            data: { intentosFallidos: { increment: 1 } },
+            select: { intentosFallidos: true },
           })
+          const bloquear = intentosFallidos >= INTENTOS_MAXIMOS
+          if (bloquear) {
+            // Al bloquear se reinicia el contador; manda la fecha de desbloqueo.
+            await prisma.usuario.update({
+              where: { id: usuario.id },
+              data: {
+                intentosFallidos: 0,
+                bloqueadoHasta: new Date(Date.now() + BLOQUEO_MINUTOS * 60_000),
+              },
+            })
+          }
 
-          // El intento que agota los reintentos ya avisa del bloqueo, en vez de
-          // dejar que el usuario descubra en el siguiente que algo cambio.
           if (bloquear) {
             throw new Error(
               `Usuario bloqueado por ${INTENTOS_MAXIMOS} intentos fallidos. Vuelve a intentarlo en ${BLOQUEO_MINUTOS} minutos.`,
@@ -124,15 +114,11 @@ export const authOptions: NextAuthOptions = {
   },
 }
 
-/** Sesion actual en Server Components y API Routes. */
+/** Sesion actual (servidor). */
 export function sesionActual() {
   return getServerSession(authOptions)
 }
 
-/**
- * La tabla de permisos vive en lib/dominio.ts, que no depende de nada del
- * servidor, para que el cliente pueda leer la misma sin arrastrar Prisma. Aqui
- * solo se reexporta, que es donde el codigo del servidor la busca.
- */
+/** Los permisos viven en lib/dominio.ts para que el cliente tambien los use. */
 export { PERMISOS as permisos, puede } from '@/lib/dominio'
 export type { Accion } from '@/lib/dominio'

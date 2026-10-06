@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { ok, manejarError, exigirPermiso } from '@/lib/api'
 import { esquemaUsuarioNuevo } from '@/lib/esquemas'
 
-/** Nunca se devuelve el hash de la contrasena al cliente. */
+/** Campos que se devuelven (nunca el hash de la contrasena). */
 const camposPublicos = {
   id: true,
   nombre: true,

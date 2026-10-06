@@ -28,8 +28,7 @@ export default function CuadrillaDetallePage({ params }: { params: Promise<{ id:
 
   const cerrarAsignacion = async (asignacionId: number) => {
     setProcesando(asignacionId)
-    // La fecha de cierre sale del equipo del residente, no del reloj UTC del
-    // servidor.
+    // Fecha de cierre con la hora local, no UTC.
     await enviar(`/api/cuadrillas/${id}/integrantes/${asignacionId}`, 'PATCH', {
       fechaFin: hoyTexto(),
     })

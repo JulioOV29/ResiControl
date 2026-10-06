@@ -5,12 +5,8 @@ import { formatoNumero, formatoPorcentaje } from '@/lib/utils'
 import { formatoDuracion } from '@/lib/calculos'
 
 /**
- * El informe de un dia: lo que se produjo, en que actividades y a que ritmo.
- *
- * Vive al lado del calendario y se llena al pulsar un dia. No consulta nada:
- * son los mismos numeros que el panel ya calculo para ese dia, leidos de otra
- * manera. El calendario responde "cuando", este bloque responde "que paso ese
- * dia".
+ * Informe de un dia: produccion, actividades y rendimiento.
+ * Usa los datos que ya calculo el panel; no consulta nada.
  */
 
 type Dia = {
@@ -20,7 +16,7 @@ type Dia = {
   registros: number
   horasEfectivas: number
   rendimiento: number | null
-  /** m2 del dia repartidos por actividad, con el id de la actividad de clave. */
+  /** Cantidad del dia por actividad (clave: id de la actividad). */
   porActividad: Record<string, number>
 }
 
@@ -42,13 +38,13 @@ const MESES = [
   'diciembre',
 ]
 
-/** "2026-09-01" -> "martes, 1 de septiembre". Se lee en UTC, como se guarda. */
+/** "2026-09-01" -> "martes, 1 de septiembre" (en UTC). */
 function textoFecha(iso: string) {
   const d = new Date(`${iso}T00:00:00.000Z`)
   return `${DIAS[d.getUTCDay()]}, ${d.getUTCDate()} de ${MESES[d.getUTCMonth()]}`
 }
 
-/** Un numero grande con su etiqueta encima. */
+/** Numero grande con su etiqueta. */
 function Dato({
   etiqueta,
   valor,
@@ -78,9 +74,9 @@ export function InformeDia({
   unidad = 'm2',
 }: {
   dia: Dia | null
-  /** Las actividades del periodo, para poner nombre a cada id. */
+  /** Actividades del periodo, para poner nombre a cada id. */
   actividades: Actividad[]
-  /** La unidad en que mide el panel: m2, ml, und... */
+  /** Unidad del panel: m2, ml, und... */
   unidad?: string
 }) {
   if (!dia) {
@@ -97,7 +93,7 @@ export function InformeDia({
 
   const cumplimiento = dia.m2Meta > 0 ? dia.m2Ejecutados / dia.m2Meta : null
 
-  // Solo las actividades que tuvieron produccion ese dia, de mayor a menor.
+  // Actividades con produccion ese dia, de mayor a menor.
   const reparto = actividades
     .map((a) => ({ etiqueta: a.etiqueta, m2: dia.porActividad[a.clave] ?? 0 }))
     .filter((a) => a.m2 > 0)
@@ -112,7 +108,7 @@ export function InformeDia({
         <h3 className="text-sm font-semibold capitalize text-obra-900">{textoFecha(dia.fecha)}</h3>
       </header>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-2 2xl:grid-cols-4">
         <Dato
           etiqueta="Produccion"
           valor={formatoNumero(dia.m2Ejecutados)}
@@ -137,7 +133,7 @@ export function InformeDia({
         />
       </div>
 
-      {/* Reparto por actividad: la barra es la parte del dia, el numero manda */}
+      {/* Reparto por actividad */}
       <div className="mt-4 min-h-0 flex-1">
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-obra-400">
           Que se hizo ese dia
@@ -146,8 +142,6 @@ export function InformeDia({
         {reparto.length === 0 ? (
           <p className="text-xs text-obra-400">Sin produccion registrada.</p>
         ) : (
-          // Lista y no barras: son pocas actividades y lo que se compara son
-          // cantidades concretas, que se leen mejor como numero alineado.
           <ul className="divide-y divide-obra-100 rounded-lg border border-obra-100">
             {reparto.map((a) => {
               const parte = dia.m2Ejecutados > 0 ? a.m2 / dia.m2Ejecutados : 0

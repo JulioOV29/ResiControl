@@ -5,11 +5,13 @@ type Variante = 'primario' | 'secundario' | 'contorno' | 'peligro' | 'fantasma'
 type Tamano = 'sm' | 'md' | 'lg' | 'icono'
 
 const variantes: Record<Variante, string> = {
-  primario: 'bg-obra-900 text-white hover:bg-obra-800 focus-visible:ring-obra-900',
-  secundario: 'bg-acento-500 text-obra-900 hover:bg-acento-400 focus-visible:ring-acento-500',
-  contorno: 'border border-obra-200 bg-white text-obra-700 hover:bg-obra-50 focus-visible:ring-obra-400',
-  peligro: 'bg-red-600 text-white hover:bg-red-500 focus-visible:ring-red-600',
-  fantasma: 'text-obra-600 hover:bg-obra-100 focus-visible:ring-obra-400',
+  primario:
+    'bg-marca-600 text-white shadow-sm shadow-marca-600/20 hover:bg-marca-700 focus-visible:ring-marca-500',
+  secundario: 'bg-marca-50 text-marca-700 hover:bg-marca-100 focus-visible:ring-marca-400',
+  contorno:
+    'border border-obra-200 bg-white text-obra-700 hover:border-obra-300 hover:bg-obra-50 focus-visible:ring-obra-400',
+  peligro: 'bg-red-600 text-white hover:bg-red-700 focus-visible:ring-red-600',
+  fantasma: 'text-obra-600 hover:bg-obra-100 hover:text-obra-900 focus-visible:ring-obra-400',
 }
 
 const tamanos: Record<Tamano, string> = {

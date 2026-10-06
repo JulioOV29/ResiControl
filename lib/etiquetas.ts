@@ -1,32 +1,18 @@
 import type { Catalogos } from '@/types/dominio'
 
 /**
- * Como se escriben las opciones de los filtros y de los formularios.
- *
- * Todo lo que cuelga de un proyecto lleva su codigo detras de un guion:
- * "Torre 1 - PRY-081", "Cuadrilla 1 - PRY-001". Con varias obras abiertas, una
- * lista de torres o de cuadrillas a secas no dice de cual es cada una, y es el
- * mismo problema que ya tenia el "Apto 305" repetido entre torres.
- *
- * Vive aparte de las pantallas porque el panel, la pantalla de ejecucion y los
- * formularios de registro tienen que escribirlas igual: si cada uno arma su
- * texto, acaban discrepando.
+ * Textos de las opciones de filtros y formularios.
+ * Lo que pertenece a un proyecto lleva su codigo: "Torre 1 - PRY-081".
  */
 
 type CatalogosUbicacion = Pick<Catalogos, 'proyectos' | 'torres' | 'pisos'>
 
-/**
- * Marca lo que esta dado de baja. Una actividad, una cuadrilla o un trabajador
- * retirados siguen apareciendo en los filtros (su produccion pasada esta ahi y
- * hay que poder consultarla), pero tienen que distinguirse de los vigentes: si
- * se retiro "Mamposteria" y se creo otra con el mismo nombre, dos opciones
- * identicas en la lista no dicen cual es cual.
- */
+/** Agrega " · inactiva" a lo dado de baja. */
 export function conBaja(texto: string, activo: boolean) {
   return activo ? texto : `${texto} · inactiva`
 }
 
-/** Une un texto con el codigo de su proyecto, si se conoce. */
+/** Agrega el codigo del proyecto, si se conoce. */
 export function conProyecto(texto: string, codigoProyecto?: string | null) {
   return codigoProyecto ? `${texto} - ${codigoProyecto}` : texto
 }
@@ -36,7 +22,7 @@ export function crearEtiquetas(catalogos?: CatalogosUbicacion | null) {
   const torres = new Map((catalogos?.torres ?? []).map((t) => [t.id, t]))
   const pisos = new Map((catalogos?.pisos ?? []).map((p) => [p.id, p]))
 
-  /** El codigo del proyecto, que es lo que va detras del guion. */
+  /** Codigo del proyecto por su id. */
   const codigoProyecto = (proyectoId?: number | null) =>
     proyectoId == null ? null : (proyectos.get(proyectoId)?.codigo ?? null)
 
@@ -50,19 +36,11 @@ export function crearEtiquetas(catalogos?: CatalogosUbicacion | null) {
     piso.nombre || `Piso ${piso.numero}`
 
   return {
-    codigoProyecto,
-    proyectoDeTorre,
-    proyectoDePiso,
-    nombrePiso,
-
     /** "Torre 1 - PRY-081" */
     torre: (torre: { proyectoId: number; nombre: string }) =>
       conProyecto(torre.nombre, codigoProyecto(torre.proyectoId)),
 
-    /**
-     * "Piso 3 - PRY-081", y con la torre delante mientras el filtro de arriba
-     * no la precise: "Torre 1 - Piso 3 - PRY-081".
-     */
+    /** "Piso 3 - PRY-081", o "Torre 1 · Piso 3 - PRY-081" si se pide la torre. */
     piso: (
       piso: { torreId: number; numero: number; nombre: string | null },
       opciones?: { conTorre?: boolean },
@@ -75,9 +53,8 @@ export function crearEtiquetas(catalogos?: CatalogosUbicacion | null) {
     },
 
     /**
-     * "Apto 305 - PRY-081", con torre y piso delante mientras los filtros de
-     * arriba no los precisen. Es el caso del "Apto 305" que existe en varias
-     * torres.
+     * "Apto 305 - PRY-081", con torre y piso delante si se piden
+     * (el mismo apartamento puede existir en varias torres).
      */
     zona: (
       zona: { pisoId: number; nombre: string },
@@ -97,4 +74,3 @@ export function crearEtiquetas(catalogos?: CatalogosUbicacion | null) {
   }
 }
 
-export type Etiquetas = ReturnType<typeof crearEtiquetas>

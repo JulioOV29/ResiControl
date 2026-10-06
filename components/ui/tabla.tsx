@@ -8,14 +8,14 @@ export type Columna<T> = {
   titulo: string
   /** Contenido de la celda. */
   render: (fila: T) => React.ReactNode
-  /** Ocultar esta columna en pantallas pequenas. */
+  /** Ocultar en pantallas pequenas. */
   soloEscritorio?: boolean
   alineacion?: 'izquierda' | 'derecha'
 }
 
 /**
- * Tabla en escritorio y tarjetas apiladas en movil, que es la unica forma de
- * que una lista con muchas columnas siga siendo legible en un telefono en obra.
+ * Tabla en pantallas grandes (desde 1280 px) y tarjetas en celular, tablet y
+ * portatil pequeno (desde tablet, dos tarjetas por fila). Si la tabla no cabe, se desplaza de lado.
  */
 export function Tabla<T extends { id: number }>({
   columnas,
@@ -34,7 +34,7 @@ export function Tabla<T extends { id: number }>({
 }) {
   if (cargando) {
     return (
-      <div className="flex items-center justify-center gap-2 rounded-xl border border-obra-200 bg-white py-16 text-sm text-obra-500">
+      <div className="tarjeta flex items-center justify-center gap-2 py-16 text-sm text-obra-500">
         <Loader2 className="h-4 w-4 animate-spin" />
         Cargando...
       </div>
@@ -46,16 +46,16 @@ export function Tabla<T extends { id: number }>({
   return (
     <>
       {/* Escritorio */}
-      <div className="hidden overflow-hidden rounded-xl border border-obra-200 bg-white shadow-sm sm:block">
+      <div className="tarjeta hidden overflow-hidden xl:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="border-b border-obra-100 bg-obra-50/60">
+            <thead className="bg-obra-50/80">
               <tr>
                 {columnas.map((c) => (
                   <th
                     key={c.clave}
                     className={cn(
-                      'px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-obra-500',
+                      'px-4 py-2.5 text-left text-xs font-medium text-obra-500',
                       c.alineacion === 'derecha' && 'text-right',
                     )}
                   >
@@ -70,13 +70,13 @@ export function Tabla<T extends { id: number }>({
                 <tr
                   key={fila.id}
                   onClick={onFilaClick ? () => onFilaClick(fila) : undefined}
-                  className={cn('hover:bg-obra-50/60', onFilaClick && 'cursor-pointer')}
+                  className={cn('transition-colors hover:bg-marca-50/40', onFilaClick && 'cursor-pointer')}
                 >
                   {columnas.map((c) => (
                     <td
                       key={c.clave}
                       className={cn(
-                        'px-4 py-3 text-obra-700',
+                        'px-4 py-3.5 text-obra-700',
                         c.alineacion === 'derecha' && 'text-right tabular-nums',
                       )}
                     >
@@ -95,15 +95,18 @@ export function Tabla<T extends { id: number }>({
         </div>
       </div>
 
-      {/* Movil */}
-      <div className="space-y-3 sm:hidden">
+      {/* Celular y tablet */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:hidden">
         {filas.map((fila) => (
           <div
             key={fila.id}
             onClick={onFilaClick ? () => onFilaClick(fila) : undefined}
-            className="rounded-xl border border-obra-200 bg-white p-4 shadow-sm"
+            className={cn(
+              'tarjeta flex flex-col p-4',
+              onFilaClick && 'cursor-pointer transition-colors hover:border-marca-200',
+            )}
           >
-            <div className="space-y-2">
+            <div className={cn('space-y-2', acciones && 'mb-3')}>
               {columnas
                 .filter((c) => !c.soloEscritorio)
                 .map((c, indice) => (
@@ -112,8 +115,10 @@ export function Tabla<T extends { id: number }>({
                       <div className="font-medium text-obra-900">{c.render(fila)}</div>
                     ) : (
                       <div className="flex items-baseline justify-between gap-3 text-sm">
-                        <span className="text-obra-500">{c.titulo}</span>
-                        <span className="text-right text-obra-700">{c.render(fila)}</span>
+                        <span className="shrink-0 text-obra-500">{c.titulo}</span>
+                        <span className="min-w-0 break-words text-right text-obra-700">
+                          {c.render(fila)}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -121,7 +126,7 @@ export function Tabla<T extends { id: number }>({
             </div>
             {acciones && (
               <div
-                className="mt-3 flex justify-end gap-1 border-t border-obra-100 pt-3"
+                className="mt-auto flex justify-end gap-1 border-t border-obra-100 pt-3"
                 onClick={(e) => e.stopPropagation()}
               >
                 {acciones(fila)}

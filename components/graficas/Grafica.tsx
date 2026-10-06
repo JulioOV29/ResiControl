@@ -4,12 +4,7 @@ import { useState } from 'react'
 import { Table2, LineChart as IconoGrafica } from 'lucide-react'
 import { paleta } from './paleta'
 
-/**
- * Marco comun de las graficas: titulo, nota al pie y una vista de tabla.
- *
- * La tabla no es un extra: es lo que garantiza que ningun valor dependa de
- * pasar el mouse por encima ni de distinguir un color.
- */
+/** Marco comun de las graficas: titulo, nota y vista de tabla con los datos. */
 export function Grafica({
   titulo,
   descripcion,
@@ -24,13 +19,13 @@ export function Grafica({
   titulo: string
   descripcion?: string
   nota?: string
-  /** Mensaje cuando no hay datos que mostrar. */
+  /** Mensaje cuando no hay datos. */
   vacio?: boolean
   /** Encabezados de la vista de tabla. */
   columnas: string[]
   /** Filas de la vista de tabla, ya formateadas. */
   filas: string[][]
-  /** Controles propios de esta grafica: leyenda, agrupacion por dia o mes. */
+  /** Controles de la grafica (leyenda, agrupacion...). */
   acciones?: React.ReactNode
   children: React.ReactNode
   className?: string
@@ -39,7 +34,7 @@ export function Grafica({
 
   return (
     <section
-      className={`rounded-xl border border-obra-200 bg-white p-4 shadow-sm sm:p-5 ${className ?? ''}`}
+      className={`tarjeta p-4 sm:p-5 ${className ?? ''}`}
     >
       <header className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -50,7 +45,7 @@ export function Grafica({
           {!verTabla && acciones}
           <button
             onClick={() => setVerTabla((v) => !v)}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-obra-200 px-2.5 py-1.5 text-xs font-medium text-obra-600 hover:bg-obra-50"
+            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-obra-50 px-2.5 py-1.5 text-xs font-medium text-obra-600 hover:bg-obra-100 hover:text-obra-900"
             title={verTabla ? 'Ver la grafica' : 'Ver los datos en tabla'}
           >
             {verTabla ? (
@@ -75,7 +70,7 @@ export function Grafica({
                 {columnas.map((c, i) => (
                   <th
                     key={c}
-                    className={`px-3 py-2 text-xs font-semibold uppercase tracking-wide text-obra-500 ${
+                    className={`px-3 py-2 text-xs font-medium text-obra-500 ${
                       i === 0 ? 'text-left' : 'text-right'
                     }`}
                   >
@@ -111,7 +106,7 @@ export function Grafica({
   )
 }
 
-/** Cuadro que sigue al puntero. El valor manda, la etiqueta acompaña. */
+/** Globo que sigue al puntero. */
 export function Globo({
   titulo,
   lineas,
@@ -120,7 +115,7 @@ export function Globo({
   lineas: Array<{ etiqueta: string; valor: string; color?: string }>
 }) {
   return (
-    <div className="rounded-lg border border-obra-200 bg-white px-3 py-2 shadow-lg">
+    <div className="rounded-lg border border-obra-100 bg-white px-3 py-2 shadow-flotante">
       <p className="text-xs text-obra-500">{titulo}</p>
       <div className="mt-1.5 space-y-1">
         {lineas.map((l) => (
@@ -140,11 +135,7 @@ export function Globo({
   )
 }
 
-/**
- * Leyenda de la grafica. Va encima del dibujo y no pegada a la marca porque
- * una etiqueta sobre la linea tapa justo el dato que se quiere leer, y en
- * pantallas angostas se monta encima de las barras.
- */
+/** Leyenda de la grafica, encima del dibujo. */
 export function Leyenda({
   series,
   className,
@@ -157,8 +148,7 @@ export function Leyenda({
       {series.map((s) => (
         <span key={s.etiqueta} className="flex items-center gap-1.5 text-xs text-obra-600">
           {s.forma === 'punteada' ? (
-            // La meta va punteada tambien en la leyenda: en la grafica se
-            // distingue por el trazo, no solo por el color.
+            // La meta tambien va punteada en la leyenda.
             <span
               className="h-0 w-4 border-t-2 border-dashed"
               style={{ borderColor: s.color }}
@@ -176,14 +166,7 @@ export function Leyenda({
   )
 }
 
-/**
- * Fila de totales encima del dibujo. El numero manda y la etiqueta acompaña,
- * igual que en el globo, porque lo que se viene a leer aqui es la cifra.
- *
- * Es texto y no marcas de color a proposito: estas cifras resumen el periodo
- * entero y no una serie del dibujo de abajo, y darles color haria creer que
- * cada una corresponde a una parte de las barras.
- */
+/** Fila de totales encima del dibujo (texto, sin colores). */
 export function Totales({
   titulo,
   items,
@@ -194,7 +177,7 @@ export function Totales({
   if (items.length === 0) return null
 
   return (
-    <div className="mb-4 rounded-lg border border-obra-100 bg-obra-50/60 px-3 py-2.5">
+    <div className="mb-4 rounded-lg bg-obra-50 px-3 py-2.5">
       {titulo && (
         <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-obra-500">
           {titulo}
@@ -219,10 +202,7 @@ export function Totales({
   )
 }
 
-/**
- * Control segmentado: una sola eleccion entre pocas opciones, siempre visibles.
- * Se usa para cambiar el paso del eje de tiempo sin abrir un desplegable.
- */
+/** Control segmentado: una opcion entre pocas, todas visibles. */
 export function Segmentado<T extends string>({
   opciones,
   valor,
@@ -233,7 +213,7 @@ export function Segmentado<T extends string>({
   onCambio: (v: T) => void
 }) {
   return (
-    <div className="flex rounded-lg border border-obra-200 bg-obra-50 p-0.5">
+    <div className="flex rounded-lg bg-obra-100/70 p-0.5">
       {opciones.map((o) => (
         <button
           key={o.valor}
@@ -241,7 +221,7 @@ export function Segmentado<T extends string>({
           aria-pressed={o.valor === valor}
           className={`rounded-[6px] px-2.5 py-1 text-xs font-medium transition-colors ${
             o.valor === valor
-              ? 'bg-white text-obra-900 shadow-sm'
+              ? 'bg-white text-marca-700 shadow-sm'
               : 'text-obra-500 hover:text-obra-800'
           }`}
         >
@@ -252,7 +232,7 @@ export function Segmentado<T extends string>({
   )
 }
 
-/** Ejes y rejilla, iguales en todas las graficas. */
+/** Ejes y rejilla comunes. */
 export const ejeComun = {
   tick: { fill: paleta.ticks, fontSize: 11 },
   tickLine: false,

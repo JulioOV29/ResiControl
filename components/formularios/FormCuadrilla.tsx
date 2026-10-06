@@ -18,7 +18,7 @@ export function FormCuadrilla({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const { datos: proyectos } = useRecurso<Proyecto>(abierto ? '/api/proyectos' : null)
   const [form, setForm] = useState({
     proyectoId: '',

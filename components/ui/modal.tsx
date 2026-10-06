@@ -19,7 +19,7 @@ export function Modal({
   children: React.ReactNode
   ancho?: 'md' | 'lg' | 'xl'
 }) {
-  // Cerrar con Escape y bloquear el scroll del fondo mientras esta abierto.
+  // Escape cierra; el fondo no se desplaza mientras esta abierto.
   useEffect(() => {
     if (!abierto) return
     const alPresionar = (e: KeyboardEvent) => {
@@ -39,7 +39,7 @@ export function Modal({
   const anchos = { md: 'sm:max-w-md', lg: 'sm:max-w-lg', xl: 'sm:max-w-2xl' }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-obra-950/30 p-0 backdrop-blur-sm sm:items-center sm:p-4">
       <div className="absolute inset-0" onClick={onCerrar} aria-hidden />
 
       <div

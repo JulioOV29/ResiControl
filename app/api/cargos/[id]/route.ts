@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma'
-import { ok, manejarError, exigirPermiso, idDeRuta } from '@/lib/api'
+import { ok, manejarError, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
 import { esquemaCargo } from '@/lib/esquemas'
 
 type Contexto = { params: Promise<{ id: string }> }
@@ -20,6 +20,16 @@ export async function DELETE(_request: Request, { params }: Contexto) {
   try {
     await exigirPermiso('gestionar')
     const id = await idDeRuta(params)
+
+    // Sus metas propias no pueden quedar como metas generales.
+    const metas = await prisma.meta.count({ where: { cargoId: id } })
+    if (metas > 0) {
+      throw new ErrorApi(
+        409,
+        `No se puede eliminar: el cargo tiene ${metas} meta${metas === 1 ? '' : 's'} propia${metas === 1 ? '' : 's'}. Borralas primero en Metas.`,
+      )
+    }
+
     await prisma.cargo.delete({ where: { id } })
     return ok({ mensaje: 'Cargo eliminado' })
   } catch (error) {

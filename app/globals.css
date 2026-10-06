@@ -25,11 +25,17 @@
 @layer components {
   .campo {
     @apply w-full rounded-lg border border-obra-200 bg-white px-3 py-2 text-sm text-obra-900
-           placeholder:text-obra-400 focus:border-acento-500 focus:outline-none
-           focus:ring-2 focus:ring-acento-500/20 disabled:bg-obra-100 disabled:text-obra-400;
+           transition-colors placeholder:text-obra-400 hover:border-obra-300
+           focus:border-marca-400 focus:outline-none focus:ring-4 focus:ring-marca-500/10
+           disabled:bg-obra-50 disabled:text-obra-400;
   }
 
   .etiqueta {
     @apply mb-1.5 block text-sm font-medium text-obra-700;
+  }
+
+  /* Tarjeta base: blanca, borde muy suave y sombra difusa. */
+  .tarjeta {
+    @apply rounded-xl border border-obra-100 bg-white shadow-tarjeta;
   }
 }

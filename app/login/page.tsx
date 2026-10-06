@@ -26,9 +26,8 @@ export default function LoginPage() {
     })
 
     if (resultado?.error) {
-      // NextAuth devuelve 'CredentialsSignin' cuando la entrada no es valida y
-      // el texto del error cuando el servidor tiene algo concreto que decir,
-      // como que la cuenta quedo bloqueada por intentos fallidos.
+      // 'CredentialsSignin' = datos incorrectos; otro texto es un mensaje del
+      // servidor (por ejemplo, cuenta bloqueada).
       setError(
         resultado.error === 'CredentialsSignin'
           ? 'Correo o contrasena incorrectos, o la cuenta esta desactivada.'
@@ -44,11 +43,11 @@ export default function LoginPage() {
 
   return (
     <main className="flex min-h-screen">
-      {/* Panel de marca: solo desde escritorio */}
-      <section className="hidden w-1/2 flex-col justify-between bg-obra-900 p-12 text-white lg:flex">
+      {/* Panel de marca (solo escritorio) */}
+      <section className="hidden w-1/2 flex-col justify-between bg-gradient-to-br from-marca-600 via-marca-700 to-marca-900 p-12 text-white lg:flex">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-acento-500">
-            <HardHat className="h-6 w-6 text-obra-900" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15 ring-1 ring-white/25">
+            <HardHat className="h-6 w-6 text-white" />
           </div>
           <span className="text-lg font-semibold tracking-tight">ResiControl</span>
         </div>
@@ -58,13 +57,13 @@ export default function LoginPage() {
             Registrar una vez, calcular automaticamente y reutilizar la informacion
             muchas veces.
           </h1>
-          <p className="mt-4 text-obra-300">
+          <p className="mt-4 text-marca-100">
             Produccion, tiempos, rendimiento, cumplimiento y avance de obra, calculados
             a partir de un solo registro de ejecucion.
           </p>
         </div>
 
-        <p className="text-xs text-obra-400">
+        <p className="text-xs text-marca-200">
           Sistema de gestion y analisis de informacion de obra
         </p>
       </section>
@@ -73,8 +72,8 @@ export default function LoginPage() {
       <section className="flex w-full flex-col justify-center px-6 py-12 sm:px-12 lg:w-1/2">
         <div className="mx-auto w-full max-w-sm">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-obra-900">
-              <HardHat className="h-6 w-6 text-acento-500" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-marca-600">
+              <HardHat className="h-6 w-6 text-white" />
             </div>
             <span className="text-lg font-semibold text-obra-900">ResiControl</span>
           </div>

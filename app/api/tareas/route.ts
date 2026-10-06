@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { fechaDeHoy } from '@/lib/dominio'
 import { ok, manejarError, exigirSesion, exigirPermiso } from '@/lib/api'
 import { esquemaTarea } from '@/lib/esquemas'
 import {
@@ -12,13 +13,10 @@ import { ESTADOS_EJECUCION } from '@/lib/dominio'
 import type { EstadoEjecucion } from '@/lib/dominio'
 
 /**
- * Las tareas asignadas.
- *
- * Filtros de la url:
- *   proyectoId, torreId   acotan por ubicacion, subiendo por la jerarquia
- *   estado                PENDIENTE, EN_PROCESO, TERMINADO o SUSPENDIDO
- *   sinObra=1             solo las que todavia no tienen registro de obra, que
- *                         es lo que ofrece el formulario de registro
+ * Tareas asignadas. Filtros:
+ *   proyectoId  tareas de ese proyecto
+ *   estado      PENDIENTE, EN_PROCESO, TERMINADO o SUSPENDIDO
+ *   sinObra=1   solo las que aun no tienen registro de obra
  */
 export async function GET(request: Request) {
   try {
@@ -31,21 +29,16 @@ export async function GET(request: Request) {
     }
 
     const proyectoId = numero('proyectoId')
-    const torreId = numero('torreId')
     const estado = parametros.get('estado')
     const sinObra = parametros.get('sinObra') === '1'
 
     const tareas = await prisma.tarea.findMany({
       where: {
-        ...(torreId
-          ? { elemento: { zona: { piso: { torreId } } } }
-          : proyectoId
-            ? { elemento: { zona: { piso: { torre: { proyectoId } } } } }
-            : {}),
+        ...(proyectoId ? { elemento: { zona: { piso: { torre: { proyectoId } } } } } : {}),
         ...(estado && ESTADOS_EJECUCION.includes(estado as EstadoEjecucion)
           ? { estado: estado as EstadoEjecucion }
           : {}),
-        // "is: null" es la forma de pedir las tareas sin obra abierta.
+        // Tareas sin obra.
         ...(sinObra ? { registro: { is: null } } : {}),
       },
       orderBy: [{ estado: 'asc' }, { fechaInicioPlan: 'asc' }, { id: 'desc' }],
@@ -63,25 +56,24 @@ export async function POST(request: Request) {
     const sesion = await exigirPermiso('gestionar')
     const datos = esquemaTarea.parse(await request.json())
 
-    // Un trabajo se encarga una vez: dos tareas sobre el mismo muro y la misma
-    // actividad acababan abriendo dos obras de lo mismo.
+    // Una sola tarea por elemento y actividad.
     await validarTareaUnica(datos.elementoId, datos.actividadId)
-    // Se encarga a quien ya tiene precio acordado para esa actividad.
+    // El trabajador debe tener precio para la actividad.
     await exigirPrecioAcordado(datos.trabajadorId, datos.actividadId)
 
-    // Las mismas reglas que una jornada: la cuadrilla tiene que ser del
-    // proyecto del elemento, y el trabajador tiene que estar en esa cuadrilla en
-    // la fecha prevista de inicio.
+    // Cuadrilla del mismo proyecto y trabajador en esa cuadrilla en la fecha de inicio.
     await validarCoherencia({
       elementoId: datos.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
-      fechaEjecucion: datos.fechaInicioPlan ?? new Date(),
+      fechaEjecucion: datos.fechaInicioPlan ?? fechaDeHoy(),
     })
 
     const creada = await prisma.tarea.create({
       data: {
         ...datos,
+        // Una tarea nueva arranca pendiente, o suspendida si asi se pide.
+        estado: datos.estado === 'SUSPENDIDO' ? 'SUSPENDIDO' : 'PENDIENTE',
         codigo: await siguienteCodigoDeTarea(),
         usuarioAsignaId: sesion.user.id,
       },

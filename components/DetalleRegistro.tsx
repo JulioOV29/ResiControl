@@ -17,10 +17,7 @@ function Dato({ etiqueta, valor }: { etiqueta: string; valor: React.ReactNode })
   )
 }
 
-/**
- * Ficha de un registro. Se abre al pulsar la referencia al registro anterior,
- * y desde ella se puede seguir retrocediendo por la cadena de la obra.
- */
+/** Ficha de un registro. Permite recorrer la cadena de la obra. */
 export function DetalleRegistro({
   registroId,
   onCerrar,
@@ -37,7 +34,7 @@ export function DetalleRegistro({
   const i = dato ? indicadoresJornada(dato) : null
   const codigos = dato ? codigosDeRegistro(dato) : null
   const esApertura = codigos?.esApertura ?? false
-  /** La unidad de la actividad: m2, ml, und... */
+  /** Unidad de la actividad: m2, ml, und... */
   const uni = dato?.actividad?.unidadMedida ?? 'm2'
 
   return (

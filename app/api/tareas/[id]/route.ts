@@ -1,26 +1,16 @@
 import { prisma } from '@/lib/prisma'
-import { ok, manejarError, exigirSesion, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
+import { fechaDeHoy } from '@/lib/dominio'
+import { ok, manejarError, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
 import { esquemaTarea } from '@/lib/esquemas'
 import {
   relacionesTarea,
   validarCoherencia,
   validarTareaUnica,
   exigirPrecioAcordado,
+  sincronizarEstadoTarea,
 } from '@/lib/consultas'
 
 type Contexto = { params: Promise<{ id: string }> }
-
-export async function GET(_request: Request, { params }: Contexto) {
-  try {
-    await exigirSesion()
-    const id = await idDeRuta(params)
-    const tarea = await prisma.tarea.findUnique({ where: { id }, include: relacionesTarea })
-    if (!tarea) throw new ErrorApi(404, 'La tarea no existe')
-    return ok(tarea)
-  } catch (error) {
-    return manejarError(error)
-  }
-}
 
 export async function PUT(request: Request, { params }: Contexto) {
   try {
@@ -40,15 +30,7 @@ export async function PUT(request: Request, { params }: Contexto) {
 
     const datos = esquemaTarea.parse(await request.json())
 
-    /**
-     * Si la obra ya arranco, el encargo ya se materializo: mover la tarea a
-     * otro elemento o a otra actividad dejaria la tarea diciendo una cosa y lo
-     * ejecutado otra. Lo que si se puede corregir es a quien se le asigna, las
-     * fechas previstas, la meta, el estado y las observaciones.
-     *
-     * Las medidas no aparecen aqui porque ya no son suyas: viven en el elemento
-     * constructivo y se corrigen en su ficha.
-     */
+    /** Si la tarea ya tiene obra, no se puede cambiar su elemento ni su actividad. */
     if (actual.registro) {
       const cambio =
         datos.elementoId !== actual.elementoId || datos.actividadId !== actual.actividadId
@@ -70,12 +52,18 @@ export async function PUT(request: Request, { params }: Contexto) {
       elementoId: datos.elementoId,
       cuadrillaId: datos.cuadrillaId,
       trabajadorId: datos.trabajadorId,
-      fechaEjecucion: datos.fechaInicioPlan ?? new Date(),
+      fechaEjecucion: datos.fechaInicioPlan ?? fechaDeHoy(),
     })
 
-    const actualizada = await prisma.tarea.update({
+    // El estado lo da el avance de la obra; a mano solo se suspende o se reactiva.
+    await prisma.tarea.update({
       where: { id },
-      data: datos,
+      data: { ...datos, estado: datos.estado === 'SUSPENDIDO' ? 'SUSPENDIDO' : 'PENDIENTE' },
+    })
+    await sincronizarEstadoTarea(id)
+
+    const actualizada = await prisma.tarea.findUniqueOrThrow({
+      where: { id },
       include: relacionesTarea,
     })
     return ok(actualizada)
@@ -95,9 +83,7 @@ export async function DELETE(_request: Request, { params }: Contexto) {
     })
     if (!tarea) throw new ErrorApi(404, 'La tarea no existe')
 
-    // Borrar una tarea con obra abierta dejaria la obra sin de donde viene. Si
-    // el trabajo se cancela, la tarea se suspende; si se asigno por error y no
-    // se ha ejecutado nada, entonces si se borra.
+    // Una tarea con obra no se borra; se puede suspender.
     if (tarea.registro) {
       throw new ErrorApi(
         409,

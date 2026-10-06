@@ -7,10 +7,10 @@ import { AvisoError, Pasos, PiePasos, VentanaError, useEnvio } from './base'
 import { useRecurso, useRecursoUnico } from '@/lib/cliente'
 import { crearEtiquetas } from '@/lib/etiquetas'
 import { fechaParaInput, formatoNumero, hoyTexto } from '@/lib/utils'
-import { opcionesEstadoEjecucion, cantidadDelElemento } from '@/lib/dominio'
+import { ETIQUETA_ESTADO_EJECUCION, cantidadDelElemento } from '@/lib/dominio'
 import type { Catalogos, Cuadrilla, Elemento, Tarea } from '@/types/dominio'
 
-/** Si el trabajador tiene precio acordado para esa actividad. */
+/** true si el trabajador tiene precio para esa actividad. */
 function tienePrecio(
   trabajador: { tarifas?: Array<{ actividadId: number }> } | undefined | null,
   actividadId: string | number | null | undefined,
@@ -21,15 +21,7 @@ function tienePrecio(
 
 /**
  * Asignar una tarea: el trabajo que se encarga antes de ejecutarlo.
- *
- * Pide los mismos datos con los que luego se registra la jornada, porque es
- * justo lo que el registro va a heredar: donde, que actividad, quien lo hace,
- * para cuando y con que meta. Las medidas no se piden: son las del elemento
- * constructivo, que es donde se miden una sola vez.
- *
- * La ubicacion se elige bajando por la jerarquia (proyecto, torre, piso, zona,
- * elemento) igual que en el registro de obra, con la misma jerarquia ya en
- * memoria: encadenar es filtrar un array, no una peticion por desplegable.
+ * El registro de obra hereda estos datos. Las medidas son las del elemento.
  */
 const vacio = {
   proyectoId: '',
@@ -41,7 +33,8 @@ const vacio = {
   cuadrillaId: '',
   trabajadorId: '',
   m2Meta: '',
-  fechaInicioPlan: hoyTexto(),
+  // Se pone al abrir el formulario (no al cargar la pagina).
+  fechaInicioPlan: '',
   fechaFinPlan: '',
   estado: 'PENDIENTE',
   observaciones: '',
@@ -66,15 +59,10 @@ export function FormTarea({
     ventanaError,
     mostrarVentanaError,
     cerrarVentanaError,
-  } = useEnvio()
+  } = useEnvio(abierto)
   const [form, setForm] = useState(vacio)
 
-  /**
-   * El formulario se llena en dos pasos: primero que trabajo y donde, y solo
-   * despues lo demas. Es lo que permite pedir la meta en la unidad correcta:
-   * hasta que no hay actividad elegida no se sabe si se mide en m2, en ml o en
-   * unidades.
-   */
+  /** Dos pasos: primero que y donde; asi la meta se pide en la unidad correcta. */
   const [paso, setPaso] = useState(1)
 
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
@@ -121,7 +109,7 @@ export function FormTarea({
 
   const integrantes = (cuadrilla.dato?.integrantes ?? []).filter((i) => i.activo)
   const trabajadorElegido = integrantes.find((i) => String(i.trabajadorId) === form.trabajadorId)
-  /** El trabajador elegido no tiene precio acordado para la actividad elegida. */
+  /** El trabajador elegido no tiene precio para la actividad. */
   const faltaTarifa = Boolean(
     form.trabajadorId &&
       form.actividadId &&
@@ -133,11 +121,10 @@ export function FormTarea({
     if (!abierto) return
     setPaso(1)
     if (!registro) {
-      setForm(vacio)
+      setForm({ ...vacio, fechaInicioPlan: hoyTexto() })
       return
     }
-    // Al editar, la ubicacion se reconstruye de abajo hacia arriba desde el
-    // elemento, que es lo unico que guarda la tarea.
+    // Al editar, la ubicacion se reconstruye desde el elemento.
     const zona = registro.elemento?.zona
     setForm({
       proyectoId: zona ? String(zona.piso.torre.proyecto.id) : '',
@@ -156,43 +143,51 @@ export function FormTarea({
     })
   }, [abierto, registro])
 
-  // Las medidas no se teclean aqui: son las del elemento constructivo, que es
-  // donde se miden una sola vez. La tarea solo dice que hay que hacerlo.
   const elementoElegido = elementos.datos.find((f) => String(f.id) === form.elementoId)
 
-  /** La unidad en que se mide esta actividad: m2, ml, und... */
-  const unidad =
-    actividades.find((a) => String(a.id) === form.actividadId)?.unidadMedida ?? 'm2'
+  /** Estado que da el avance (el que tenia, o Pendiente si estaba suspendida o es nueva). */
+  const estadoAutomatico =
+    registro && registro.estado !== 'SUSPENDIDO' ? registro.estado : 'PENDIENTE'
 
-  /** El primer paso esta completo cuando se sabe que se hace y sobre que. */
+  /** Unidad de la actividad: m2, ml, und... */
+  const unidad =
+    actividades.find((a) => String(a.id) === form.actividadId)?.unidadMedida ??
+    // Al editar, la actividad puede estar inactiva: se usa la de la tarea.
+    (registro && String(registro.actividadId) === form.actividadId
+      ? registro.actividad?.unidadMedida
+      : undefined) ??
+    'm2'
+
+  /** El paso 1 esta completo con elemento y actividad. */
   const listoPaso1 = Boolean(form.elementoId && form.actividadId)
 
   /**
-   * Lo que hay que ejecutar, en la unidad de la actividad: m2 = largo x alto,
-   * ml = largo. En und, m3 o kg las medidas no lo dicen y queda nulo: se
-   * escribe al abrir la obra.
+   * Cantidad por ejecutar: m2 = largo x alto, ml = largo.
+   * En und, m3 o kg es null (se escribe al abrir la obra).
    */
   const cantidad = elementoElegido
-    ? cantidadDelElemento(unidad, elementoElegido.largo, elementoElegido.alto)
+    ? cantidadDelElemento(
+        unidad,
+        elementoElegido.largo,
+        elementoElegido.alto,
+        elementoElegido.areaVanos,
+      )
     : null
 
-  // La obra ya arranco: la ubicacion, la actividad y las medidas quedan fijas,
-  // porque lo ejecutado se midio contra ellas.
+  // Si la obra ya empezo, ubicacion y actividad no se cambian.
   const obraIniciada = Boolean(registro?.registro)
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
-    // Enter en un campo del paso 1 no guarda a medias: avanza.
+    // Enter en el paso 1 avanza, no guarda.
     if (paso < 2) {
       if (listoPaso1) setPaso(2)
       return
     }
-    // Y si el envio lo disparo un boton que no es de guardar (el "Siguiente"),
-    // no se guarda: solo se cambio de paso.
+    // Si el envio vino de un boton que no es Guardar, solo se cambio de paso.
     const boton = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
     if (boton && boton.type !== 'submit') return
-    // Sin precio acordado no se encarga. Al editar solo se exige si cambia el
-    // trabajador o la actividad, igual que en el servidor.
+    // Sin precio no se guarda (al editar, solo si cambia trabajador o actividad).
     const cambiaQuienOQue =
       !registro ||
       form.trabajadorId !== String(registro.trabajadorId ?? '') ||
@@ -219,7 +214,7 @@ export function FormTarea({
       titulo={registro ? `Editar tarea ${registro.codigo}` : 'Asignar tarea'}
       descripcion="El trabajo que se encarga. El registro de obra hereda estos datos cuando se ejecuta."
       abierto={abierto}
-      // Con la ventana de error abierta, Escape cierra solo esa ventana.
+      // Con la ventana de error abierta, Escape solo la cierra a ella.
       onCerrar={ventanaError ? cerrarVentanaError : onCerrar}
       ancho="lg"
     >
@@ -235,7 +230,7 @@ export function FormTarea({
           </p>
         )}
 
-        {/* --- Paso 1: que y donde ------------------------------------------ */}
+        {/* --- Paso 1: que y donde --- */}
         {paso === 1 && (
         <section>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-obra-500">
@@ -353,7 +348,7 @@ export function FormTarea({
         </section>
         )}
 
-        {/* --- Paso 2: cuanto, a quien y para cuando ------------------------ */}
+        {/* --- Paso 2: cuanto, a quien y para cuando --- */}
         {paso === 2 && (
         <>
         <section>
@@ -361,11 +356,7 @@ export function FormTarea({
             Cantidad por ejecutar
           </p>
           <div className="grid items-end gap-4 sm:grid-cols-2">
-            {/*
-              Las medidas llegan heredadas del elemento constructivo y no se
-              teclean aqui: un muro se mide una vez, al darlo de alta. Si estan
-              mal, se corrigen en la ficha del elemento.
-            */}
+            {/* Medidas del elemento (se corrigen en su ficha) */}
             <div className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2">
               <p className="text-xs text-obra-500">Cantidad por ejecutar</p>
               {elementoElegido ? (
@@ -405,7 +396,7 @@ export function FormTarea({
           </div>
         </section>
 
-        {/* --- A quien y para cuando ---------------------------------------- */}
+        {/* --- A quien y para cuando --- */}
         <section>
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-obra-500">
             Asignacion y plazo
@@ -434,8 +425,7 @@ export function FormTarea({
               >
                 <option value="">Sin asignar</option>
                 {integrantes.map((i) => {
-                  // Sin precio acordado para esta actividad no se puede elegir:
-                  // primero se acuerda en su ficha.
+                  // Sin precio para la actividad no se puede elegir.
                   const sinPrecio = Boolean(form.actividadId) && !tienePrecio(i.trabajador, form.actividadId)
                   return (
                     <option
@@ -481,15 +471,14 @@ export function FormTarea({
                 onChange={(e) => cambiar({ estado: e.target.value })}
                 required
               >
-                {opcionesEstadoEjecucion.map((o) => (
-                  <option key={o.valor} value={o.valor}>
-                    {o.texto}
-                  </option>
-                ))}
+                <option value={estadoAutomatico}>
+                  {ETIQUETA_ESTADO_EJECUCION[estadoAutomatico]} (segun el avance)
+                </option>
+                <option value="SUSPENDIDO">{ETIQUETA_ESTADO_EJECUCION.SUSPENDIDO}</option>
               </Seleccion>
               <p className="mt-1 text-xs text-obra-400">
-                Se mueve solo cuando se registra ejecucion. Suspendido es el unico que manda sobre
-                el avance.
+                El estado se mueve solo con los registros de obra. A mano solo se suspende o se
+                reactiva.
               </p>
             </Campo>
 

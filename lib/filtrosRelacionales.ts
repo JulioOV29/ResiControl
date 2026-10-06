@@ -1,27 +1,14 @@
 /**
- * Filtros que se condicionan entre si, como los segmentadores del Excel.
+ * Filtros que se condicionan entre si, como los segmentadores de Excel.
  *
- * La idea: una opcion esta disponible en un filtro si existe al menos un
- * registro que la tiene y que ademas cumple todos los demas filtros elegidos.
- * Asi, al elegir la Torre B los pisos, las zonas, las cuadrillas y los
- * trabajadores se reducen a los que de verdad trabajaron ahi.
- *
- * Todo se calcula en el navegador a partir de una lista pequena de
- * combinaciones (zona, actividad, cuadrilla, trabajador) que llega una sola vez
- * con los catalogos. Elegir un filtro no vuelve a preguntarle nada a la base.
- *
- * Las fechas no entran aqui a proposito: acotan el panel, pero no deciden que
- * opciones se ofrecen. Si entraran, estrechar el rango podria dejar sin
- * disponibles a los filtros ya elegidos y borrarlos sin que el residente lo
- * pidiera.
- *
- * Lo que NUNCA se esconde es lo que no aparece en ningun registro: una actividad
- * o una cuadrilla recien dada de alta no esta en ninguna combinacion, asi que la
- * regla de arriba no tiene nada que decir de ella. Ver idsConRegistros.
+ * Una opcion se ofrece si hay al menos un registro con ella que cumpla los
+ * demas filtros elegidos. Todo se calcula en el navegador con la lista de
+ * combinaciones que llega con los catalogos.
+ * Las fechas no participan. Lo que aun no tiene registros se ofrece siempre.
  */
 import type { Catalogos } from "@/types/dominio";
 
-export const DIMENSIONES = [
+const DIMENSIONES = [
   "proyectoId",
   "torreId",
   "pisoId",
@@ -34,17 +21,13 @@ export const DIMENSIONES = [
 
 export type Dimension = (typeof DIMENSIONES)[number];
 
-/** Lo elegido en cada filtro, como texto: '' significa sin filtro. */
+/** Lo elegido en cada filtro ('' = sin filtro). */
 export type Seleccion = Record<Dimension, string>;
 
-/** Un registro reducido a los identificadores de cada dimension. */
+/** Un registro reducido a los ids de cada dimension. */
 export type Fila = Record<Dimension, number | null>;
 
-/**
- * Cuando dos filtros elegidos se contradicen, se suelta primero el mas
- * especifico: si cambias de torre, la zona de la torre anterior es la que
- * sobra, no la torre que acabas de elegir.
- */
+/** Orden en que se sueltan filtros que chocan: primero el mas especifico. */
 const ORDEN_DE_LIMPIEZA: Dimension[] = [
   "zonaId",
   "pisoId",
@@ -56,10 +39,7 @@ const ORDEN_DE_LIMPIEZA: Dimension[] = [
   "actividadId",
 ];
 
-/**
- * Completa cada combinacion con la torre, el piso, el proyecto y el cargo que
- * le corresponden, subiendo por la jerarquia del catalogo.
- */
+/** Completa cada combinacion con torre, piso, proyecto y cargo. */
 export function expandirFilas(
   catalogos: Pick<Catalogos, "torres" | "pisos" | "zonas" | "trabajadores">,
   combinaciones: Array<[number, number, number, number | null]>,
@@ -89,7 +69,7 @@ export function expandirFilas(
       actividadId,
       cuadrillaId,
       trabajadorId,
-      // Un registro puede no tener trabajador; entonces tampoco tiene cargo.
+      // Sin trabajador no hay cargo.
       cargoId:
         trabajadorId != null
           ? (trabajadores.get(trabajadorId)?.cargoId ?? null)
@@ -100,17 +80,8 @@ export function expandirFilas(
 }
 
 /**
- * Los identificadores que aparecen en ALGUN registro, dimension por dimension,
- * sin mirar los filtros.
- *
- * Distingue dos cosas que se parecen y no son lo mismo:
- *
- * - Una opcion que tiene trabajo, pero no con los filtros puestos. Esa se
- *   esconde: es justo para lo que estan los filtros relacionales.
- * - Una opcion que no tiene trabajo en ninguna parte, como una actividad que se
- *   acaba de crear. De esa no hay nada que deducir, y esconderla la hacia
- *   desaparecer el mismo dia en que se da de alta, que es cuando se busca. Se
- *   ofrece siempre.
+ * Ids que aparecen en algun registro, sin mirar filtros.
+ * Lo que no aparece (por ejemplo, una actividad nueva) se ofrece siempre.
  */
 export function idsConRegistros(filas: Fila[]): Record<Dimension, Set<number>> {
   const resultado = {} as Record<Dimension, Set<number>>;
@@ -125,7 +96,7 @@ export function idsConRegistros(filas: Fila[]): Record<Dimension, Set<number>> {
   return resultado;
 }
 
-/** Los filtros puestos, con su valor ya convertido a numero. */
+/** Filtros puestos, con su valor como numero. */
 function puestos(seleccion: Seleccion): Array<[Dimension, number]> {
   const lista: Array<[Dimension, number]> = [];
   for (const d of DIMENSIONES) {
@@ -136,12 +107,8 @@ function puestos(seleccion: Seleccion): Array<[Dimension, number]> {
 }
 
 /**
- * Para cada filtro, los identificadores que tienen al menos un registro
- * compatible con TODOS LOS DEMAS filtros elegidos.
- *
- * El filtro propio no cuenta al calcular sus opciones: por eso, con la Torre B
- * elegida, la lista de torres sigue ofreciendo la A y la C, y se puede cambiar
- * de idea sin pasar por Limpiar.
+ * Para cada filtro, los ids compatibles con los DEMAS filtros elegidos.
+ * El propio filtro no cuenta, asi se puede cambiar de opcion sin limpiar.
  */
 export function opcionesDisponibles(
   filas: Fila[],
@@ -164,23 +131,16 @@ export function opcionesDisponibles(
 }
 
 /**
- * Deja la seleccion sin contradicciones despues de un cambio.
- *
- * Si ningun registro cumple todo lo elegido, va soltando filtros en
- * ORDEN_DE_LIMPIEZA hasta que exista alguno. Los filtros que el usuario acaba
- * de tocar (`fijos`) nunca se sueltan: lo que se acaba de elegir manda sobre lo
- * que estaba puesto de antes.
- *
- * Suelta uno a uno y vuelve a comprobar, en vez de vaciar todo lo que choca,
- * para conservar el mayor numero posible de filtros.
+ * Quita contradicciones tras un cambio: suelta filtros uno a uno, en
+ * ORDEN_DE_LIMPIEZA, hasta que haya registros. Nunca suelta los `fijos`
+ * (los que el usuario acaba de tocar).
  */
 export function conciliar<T extends Seleccion>(
   filas: Fila[],
   seleccion: T,
   fijos: readonly string[] = [],
 ): T {
-  // Sin combinaciones no hay con que juzgar: los catalogos aun no llegan, o la
-  // obra no tiene registros.
+  // Sin combinaciones no hay como juzgar.
   if (filas.length === 0) return seleccion;
 
   const resultado = { ...seleccion };
@@ -196,10 +156,6 @@ export function conciliar<T extends Seleccion>(
     }
   }
 
-  // Si soltando filtros no se llega a ninguna combinacion, no se suelta nada.
-  // Pasa al elegir algo que todavia no tiene ningun registro: por mucho que se
-  // vacien el proyecto y la torre nunca va a haber una combinacion que lo
-  // contenga, y borrarlos solo le quita al residente lo que si habia elegido.
-  // Mejor un panel en cero con los filtros intactos.
+  // Si no se llega a ninguna combinacion, se deja la seleccion como estaba.
   return hayRegistro() ? resultado : seleccion;
 }

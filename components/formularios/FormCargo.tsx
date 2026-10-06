@@ -17,7 +17,7 @@ export function FormCargo({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const [form, setForm] = useState({ nombre: '', descripcion: '' })
 
   useEffect(() => {

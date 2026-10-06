@@ -4,12 +4,8 @@ import { useSession } from 'next-auth/react'
 import { puede } from '@/lib/dominio'
 
 /**
- * Permisos del usuario en el cliente. Sirve solo para mostrar u ocultar
- * botones: la autorizacion de verdad la aplica cada API Route en el servidor.
- *
- * Lee la misma tabla que el servidor (lib/dominio.ts), para que no puedan
- * discrepar: antes las condiciones estaban escritas a mano aqui y cambiar un
- * permiso obligaba a acordarse de los dos sitios.
+ * Permisos del usuario en el navegador. Solo deciden que botones se ven;
+ * la API vuelve a validarlos.
  */
 export function usePuede() {
   const { data } = useSession()

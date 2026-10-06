@@ -1,10 +1,9 @@
 /**
- * Datos iniciales del sistema.
+ * Datos iniciales: administrador, cargos y actividades.
  *
  *   npm run seed
  *
- * Es idempotente: se puede correr varias veces sin duplicar nada.
- * Esta carpeta esta en .gitignore porque contiene credenciales de arranque.
+ * Se puede correr varias veces sin duplicar.
  */
 require('dotenv').config()
 
@@ -15,8 +14,7 @@ const prisma = new PrismaClient()
 
 const EMAIL = (process.env.SEED_ADMIN_EMAIL || 'admin@resicontrol.com').toLowerCase()
 
-// Sin contrasena por defecto: una clave de ejemplo escrita en el repositorio
-// acaba viva en produccion. Si no esta en el .env, el seed no corre.
+// La contrasena del administrador sale del .env; sin ella no corre.
 const PASSWORD = process.env.SEED_ADMIN_PASSWORD
 if (!PASSWORD || PASSWORD.length < 8) {
   console.error(

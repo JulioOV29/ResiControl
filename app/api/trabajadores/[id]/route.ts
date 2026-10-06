@@ -11,13 +11,8 @@ export async function PUT(request: Request, { params }: Contexto) {
     const { tarifas, ...datos } = esquemaTrabajador.parse(await request.json())
 
     /**
-     * La lista de tarifas que llega es la lista completa: lo que no viene se
-     * quita, lo que viene se crea o se actualiza. Todo en una transaccion,
-     * para que nunca quede media tabla de precios.
-     *
-     * Ojo con lo que NO se toca: el valor_m2 copiado en cada jornada ya
-     * guardada. Cambiar un precio afecta a lo que se registre de aqui en
-     * adelante, no a lo que ya se pago.
+     * La lista de precios que llega reemplaza a la anterior (en una transaccion).
+     * Los precios ya copiados en jornadas guardadas no cambian.
      */
     const actualizado = await prisma.$transaction(async (tx) => {
       await tx.trabajadorActividad.deleteMany({
@@ -57,12 +52,7 @@ export async function DELETE(_request: Request, { params }: Contexto) {
     await exigirPermiso('gestionar')
     const id = await idDeRuta(params)
 
-    /**
-     * Quien ya trabajo no se borra: sus jornadas guardan lo que se le pago
-     * (valor_m2), y borrarlo las dejaba pagadas sin dueño. Para sacarlo de las
-     * listas se desactiva en su ficha. La base tambien lo impide (RESTRICT);
-     * esto solo lo explica mejor.
-     */
+    /** Un trabajador con jornadas no se borra; se desactiva. */
     const [jornadas, trabajador] = await Promise.all([
       prisma.registroEjecucion.count({ where: { trabajadorId: id } }),
       prisma.trabajador.findUnique({ where: { id }, select: { nombre: true, apellido: true } }),

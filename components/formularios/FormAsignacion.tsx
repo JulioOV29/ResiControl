@@ -21,7 +21,7 @@ export function FormAsignacion({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const { datos: trabajadores } = useRecurso<Trabajador>(
     abierto ? '/api/trabajadores?activos=1' : null,
   )

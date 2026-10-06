@@ -2,19 +2,10 @@
  * Respaldo completo de la base a un archivo JSON.
  *
  *   npm run respaldo
+ *   npm run restaurar respaldos/<archivo>.json
  *
- * Existe por una razon concreta: un cambio de esquema mal dado borro los datos
- * una vez. Cuesta diez segundos correrlo y es la diferencia entre rehacer el
- * trabajo de una semana o no.
- *
- * Guarda una tabla por clave, con las filas tal como salen de la base. Los
- * Decimal y las fechas se escriben como texto para que el JSON sea fiel.
- * Se restaura con: npm run restaurar respaldos/<archivo>.json
- *
- * Con --suave no interrumpe nada si falla: lo usa el respaldo automatico que
- * corre al arrancar "npm run dev". Un respaldo que no se pudo hacer no puede
- * dejarte sin poder trabajar, pero tampoco debe pasar en silencio, asi que
- * avisa y sigue.
+ * Con --suave (lo usa "npm run dev" al arrancar) avisa si falla pero no
+ * detiene nada.
  */
 require('dotenv').config()
 
@@ -24,8 +15,7 @@ const { PrismaClient } = require('@prisma/client')
 
 const prisma = new PrismaClient()
 
-// El orden importa al restaurar: cada tabla va despues de aquellas a las que
-// apunta. Aqui solo se usa para leer, pero se comparte con restaurar.js.
+// Orden de las tablas: cada una despues de las que referencia (lo usa restaurar.js).
 const TABLAS = [
   'usuario',
   'proyecto',
@@ -33,6 +23,7 @@ const TABLAS = [
   'piso',
   'zona',
   'elementoConstructivo',
+  'vano',
   'actividad',
   'cargo',
   'trabajador',
@@ -41,14 +32,13 @@ const TABLAS = [
   'cuadrillaTrabajador',
   'meta',
   'tarea',
-  // Las liquidaciones van antes que los registros: un registro pagado apunta
-  // a su liquidacion.
+  // Las liquidaciones antes que los registros (un registro pagado apunta a ella).
   'liquidacion',
   'liquidacionLinea',
   'registroEjecucion',
 ]
 
-/** Decimal y Date -> texto, para que el JSON no pierda precision ni zona. */
+/** Decimal y Date -> texto, sin perder precision. */
 const serializar = (valor) => {
   if (valor === null || valor === undefined) return valor
   if (valor instanceof Date) return valor.toISOString()
@@ -64,14 +54,10 @@ const serializar = (valor) => {
 
 const SUAVE = process.argv.includes('--suave')
 
-/** Cuantos respaldos se conservan. Los mas viejos se van borrando solos. */
+/** Respaldos que se conservan; los mas viejos se borran. */
 const MAXIMO = 30
 
-/**
- * Neon suspende el proyecto cuando lleva un rato sin uso, y la primera consulta
- * se encuentra el servidor dormido. Antes de darse por vencido, el respaldo lo
- * intenta tres veces: despertarlo tarda unos segundos, no mas.
- */
+/** Hasta tres intentos: Neon puede tardar unos segundos en despertar. */
 async function despertarBase() {
   for (let intento = 1; intento <= 3; intento++) {
     try {
@@ -90,11 +76,15 @@ async function main() {
 
   const contenido = { generado: new Date().toISOString(), tablas: {} }
 
-  for (const tabla of TABLAS) {
-    const filas = await prisma[tabla].findMany()
-    contenido.tablas[tabla] = serializar(filas)
-    console.log(`${tabla.padEnd(22)} ${filas.length} filas`)
-  }
+  // Todas las tablas en una sola foto: lo que se guarde mientras tanto no deja el respaldo a medias.
+  const resultados = await prisma.$transaction(
+    TABLAS.map((tabla) => prisma[tabla].findMany()),
+    { isolationLevel: 'RepeatableRead' },
+  )
+  TABLAS.forEach((tabla, i) => {
+    contenido.tablas[tabla] = serializar(resultados[i])
+    console.log(`${tabla.padEnd(22)} ${resultados[i].length} filas`)
+  })
 
   const carpeta = path.join(__dirname, '..', 'respaldos')
   fs.mkdirSync(carpeta, { recursive: true })
@@ -107,7 +97,7 @@ async function main() {
   fs.writeFileSync(destino, JSON.stringify(contenido, null, 2), 'utf8')
   console.log(`\nRespaldo guardado en respaldos/${nombre}`)
 
-  // Se conservan los ultimos MAXIMO, para que la carpeta no crezca sin fin.
+  // Conserva solo los ultimos MAXIMO.
   const viejos = fs
     .readdirSync(carpeta)
     .filter((f) => f.startsWith('respaldo-') && f.endsWith('.json'))

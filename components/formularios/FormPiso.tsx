@@ -19,7 +19,7 @@ export function FormPiso({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const [form, setForm] = useState({ numero: '', nombre: '', descripcion: '' })
 
   useEffect(() => {

@@ -1,9 +1,8 @@
 import { prisma } from '@/lib/prisma'
-import { ok, manejarError, exigirSesion, exigirPermiso, idDeRuta, ErrorApi } from '@/lib/api'
+import { ok, manejarError, exigirSesion, exigirPermiso, idDeRuta, ErrorApi, sinPrecios } from '@/lib/api'
 import { esquemaRegistroObra, esquemaRegistroAvance } from '@/lib/esquemas'
 import {
   relacionesRegistro,
-  aHora,
   estadoDeObra,
   tarifaDeTrabajador,
   cantidadParaObra,
@@ -14,20 +13,23 @@ import {
   validarTareaParaObra,
   sincronizarEstadoTarea,
   tareaDeLaObra,
+  bloquearRegistros,
+  exigirNoPagado,
 } from '@/lib/consultas'
+import { horaADate, cantidadDeObra, num } from '@/lib/calculos'
 
 type Contexto = { params: Promise<{ id: string }> }
 
 export async function GET(_request: Request, { params }: Contexto) {
   try {
-    await exigirSesion()
+    const sesion = await exigirSesion()
     const id = await idDeRuta(params)
     const registro = await prisma.registroEjecucion.findUnique({
       where: { id },
       include: relacionesRegistro,
     })
     if (!registro) throw new ErrorApi(404, 'El registro no existe')
-    return ok(registro)
+    return ok(sinPrecios(registro, sesion.user.rol))
   } catch (error) {
     return manejarError(error)
   }
@@ -48,87 +50,66 @@ export async function PUT(request: Request, { params }: Contexto) {
         elementoId: true,
         trabajadorId: true,
         tareaId: true,
+        largo: true,
+        alto: true,
         cantidadTotal: true,
-        codigoRegistro: true,
-        liquidacion: { select: { codigo: true } },
+        valorM2: true,
       },
     })
     if (!actual) throw new ErrorApi(404, 'El registro no existe')
-
-    // Una jornada pagada ya es parte de un comprobante: cambiar sus metros, su
-    // trabajador o su fecha cambiaria lo que dice un pago ya hecho.
-    if (actual.liquidacion) {
-      throw new ErrorApi(
-        409,
-        `${actual.codigoRegistro} ya se pago en la liquidacion ${actual.liquidacion.codigo}: no se puede modificar. Si hay un error, un administrador tiene que anular esa liquidacion primero.`,
-      )
-    }
+    await exigirNoPagado(prisma, id, 'modificar')
 
     const cuerpo = await request.json()
     const esApertura = actual.registroOrigenId === null
     const raizId = actual.registroOrigenId ?? actual.id
+    /** Jornadas viejas sin precio toman el precio acordado si ya existe. */
+    const sinPrecio = actual.valorM2 === null
 
     if (esApertura) {
       const { horaInicio, horaFinal, tareaId, cantidadTotal, ...datos } =
         esquemaRegistroObra.parse(cuerpo)
 
       await validarCoherencia(datos)
-      // Mover la obra a otro muro o a otra actividad no puede dejarla encima de
-      // una obra que ya existe alli.
+      // No puede quedar encima de otra obra con el mismo elemento y actividad.
       await validarObraUnica(datos.elementoId, datos.actividadId, id)
       await validarFechaEnCadena(actual, datos.fechaEjecucion)
-      // La obra puede ganar, perder o cambiar de tarea; la tarea nueva tiene
-      // que estar libre y coincidir en elemento y actividad.
+      // Si cambia de tarea, la nueva debe estar libre y coincidir.
       if (tareaId) await validarTareaParaObra(tareaId, datos, id)
 
-      /**
-       * Las medidas se vuelven a leer del elemento: si la obra se mueve a otro
-       * muro, la cantidad por ejecutar es la de ese muro. Cambiarlas ya no es
-       * cosa de esta pantalla, sino de la ficha del elemento constructivo.
-       */
       const mismoTrabajo =
         datos.elementoId === actual.elementoId && datos.actividadId === actual.actividadId
       const medidas = await cantidadParaObra(
         datos.elementoId,
         datos.actividadId,
-        // Si no llega cantidad y el trabajo es el mismo, se conserva la que tenia.
-        cantidadTotal ?? (mismoTrabajo && actual.cantidadTotal !== null ? Number(actual.cantidadTotal) : null),
+        cantidadTotal ?? (mismoTrabajo && actual.cantidadTotal !== null ? num(actual.cantidadTotal) : null),
       )
 
-      // Que la cantidad quede por debajo de lo ya ejecutado en la cadena dejaria
-      // la obra por encima del 100%.
-      const obra = await estadoDeObra(raizId, id)
-      const acumuladoOtros = obra ? obra.ejecutado : 0
-      if (datos.m2Ejecutados + acumuladoOtros > medidas.cantidad + 0.005) {
-        throw new ErrorApi(
-          409,
-          `La obra de ${medidas.actividad.nombre} en ${medidas.elemento.codigoDwg} es de ${medidas.cantidad.toFixed(2)} ${medidas.unidad}, y llevaria ${(datos.m2Ejecutados + acumuladoOtros).toFixed(2)} ${medidas.unidad} sumando sus avances`,
-        )
+      /**
+       * Si el trabajo es el mismo, la obra conserva las medidas que copio al abrirse
+       * (aunque despues cambien el elemento o sus vanos). Solo la cantidad escrita
+       * a mano (und, m3, kg) se puede corregir.
+       */
+      if (mismoTrabajo) {
+        medidas.largo = num(actual.largo)
+        medidas.alto = num(actual.alto)
+        if (medidas.modo !== 'captura' || cantidadTotal == null) {
+          medidas.cantidad = cantidadDeObra(actual)
+        }
       }
 
-      /**
-       * La tarifa congelada solo se vuelve a leer si cambio la actividad o el
-       * trabajador: en ese caso la guardada era la de otro trabajo o la de
-       * otra persona. Corregir una hora o unos metros no puede repreciar la
-       * jornada.
-       */
+      /** El precio solo se recalcula si cambia la actividad o el trabajador. */
       const cambioActividad = datos.actividadId !== actual.actividadId
       const cambioElemento = datos.elementoId !== actual.elementoId
       const cambioTrabajador = datos.trabajadorId !== actual.trabajadorId
       const recalcular = cambioActividad || cambioTrabajador
 
-      // El precio se exige cuando cambia quien o que: corregir las horas de una
-      // jornada vieja que se guardo sin precio no se bloquea.
+      // Precio obligatorio solo si cambia el trabajador o la actividad
+      // (se pueden corregir horas de jornadas viejas sin precio).
       if (recalcular) await exigirPrecioAcordado(datos.trabajadorId, datos.actividadId)
 
       /**
-       * Los avances heredan elemento y actividad al crearse, asi que corregirlos
-       * en la apertura tiene que arrastrar la cadena entera: si no, el mismo
-       * muro quedaba repartido entre dos ubicaciones o dos actividades.
-       *
-       * Si cambia la actividad, cada avance tiene que reprecarse con la tarifa
-       * de SU trabajador, que no tiene por que ser el de la apertura: dias
-       * distintos de la misma obra los puede hacer gente distinta.
+       * Si cambia el elemento o la actividad, los avances cambian tambien.
+       * Cada avance se recalcula con el precio de su propio trabajador.
        */
       const avances =
         cambioActividad || cambioElemento
@@ -137,29 +118,31 @@ export async function PUT(request: Request, { params }: Contexto) {
               select: {
                 id: true,
                 trabajadorId: true,
+                cuadrillaId: true,
+                fechaEjecucion: true,
                 codigoRegistro: true,
-                liquidacion: { select: { codigo: true } },
               },
             })
           : []
 
-      // Si cambia la actividad, cada avance pasa a ser de la nueva: sus
-      // trabajadores tambien tienen que tener precio para ella.
+      // Los trabajadores de los avances tambien necesitan precio para la nueva actividad.
       if (cambioActividad) {
         for (const a of avances) await exigirPrecioAcordado(a.trabajadorId, datos.actividadId)
       }
-
-      // Mover la obra arrastra a sus avances; si alguno ya se pago, no se toca.
-      const pagado = avances.find((a) => a.liquidacion)
-      if (pagado) {
-        throw new ErrorApi(
-          409,
-          `El avance ${pagado.codigoRegistro} ya se pago en la liquidacion ${pagado.liquidacion!.codigo}: la obra ya no puede cambiar de elemento ni de actividad.`,
-        )
+      // Las cuadrillas de los avances tienen que servir en el nuevo elemento.
+      if (cambioElemento) {
+        for (const a of avances) {
+          await validarCoherencia({
+            elementoId: datos.elementoId,
+            cuadrillaId: a.cuadrillaId,
+            trabajadorId: a.trabajadorId,
+            fechaEjecucion: a.fechaEjecucion,
+          })
+        }
       }
 
       const [tarifaPropia, ...tarifasAvances] = await Promise.all([
-        recalcular
+        recalcular || sinPrecio
           ? tarifaDeTrabajador(datos.trabajadorId, datos.actividadId)
           : Promise.resolve(null),
         ...avances.map((a) =>
@@ -169,8 +152,25 @@ export async function PUT(request: Request, { params }: Contexto) {
         ),
       ])
 
-      const [actualizado] = await prisma.$transaction([
-        prisma.registroEjecucion.update({
+      const actualizado = await prisma.$transaction(async (tx) => {
+        // Bloquea la obra y sus jornadas: nadie las paga ni las cambia mientras tanto.
+        await bloquearRegistros(tx, [id, ...avances.map((a) => a.id)])
+        await exigirNoPagado(tx, id, 'modificar')
+        for (const a of avances) {
+          await exigirNoPagado(tx, a.id, 'cambiar de elemento ni de actividad')
+        }
+
+        // La cantidad no puede quedar por debajo de lo ya ejecutado.
+        const obra = await estadoDeObra(raizId, id, tx)
+        const acumuladoOtros = obra ? obra.ejecutado : 0
+        if (datos.m2Ejecutados + acumuladoOtros > medidas.cantidad + 0.005) {
+          throw new ErrorApi(
+            409,
+            `La obra de ${medidas.actividad.nombre} en ${medidas.elemento.codigoDwg} es de ${medidas.cantidad.toFixed(2)} ${medidas.unidad}, y llevaria ${(datos.m2Ejecutados + acumuladoOtros).toFixed(2)} ${medidas.unidad} sumando sus avances`,
+          )
+        }
+
+        const editado = await tx.registroEjecucion.update({
           where: { id },
           data: {
             ...datos,
@@ -178,15 +178,15 @@ export async function PUT(request: Request, { params }: Contexto) {
             alto: medidas.alto,
             cantidadTotal: medidas.cantidad,
             tareaId,
-            ...(recalcular ? { valorM2: tarifaPropia } : {}),
-            horaInicio: aHora(horaInicio),
-            horaFinal: aHora(horaFinal),
+            ...(recalcular || sinPrecio ? { valorM2: tarifaPropia } : {}),
+            horaInicio: horaADate(horaInicio),
+            horaFinal: horaADate(horaFinal),
             usuarioActualizaId: sesion.user.id,
           },
           include: relacionesRegistro,
-        }),
-        ...avances.map((a, indice) =>
-          prisma.registroEjecucion.update({
+        })
+        for (const [indice, a] of avances.entries()) {
+          await tx.registroEjecucion.update({
             where: { id: a.id },
             data: {
               elementoId: datos.elementoId,
@@ -194,18 +194,19 @@ export async function PUT(request: Request, { params }: Contexto) {
               ...(cambioActividad ? { valorM2: tarifasAvances[indice] } : {}),
               usuarioActualizaId: sesion.user.id,
             },
-          }),
-        ),
-      ])
+          })
+        }
+        return editado
+      })
 
-      // Las dos tareas implicadas: la que se suelta y la que se toma.
+      // Actualiza la tarea que se suelta y la que se toma.
       if (actual.tareaId !== tareaId) await sincronizarEstadoTarea(actual.tareaId)
       await sincronizarEstadoTarea(tareaId)
 
       return ok(actualizado)
     }
 
-    // Un avance solo cambia sus propios datos; no se mueve de obra.
+    // Un avance solo cambia sus datos; no cambia de obra.
     const { horaInicio, horaFinal, registroAnteriorId, ...datos } =
       esquemaRegistroAvance.parse({ ...cuerpo, registroAnteriorId: actual.registroAnteriorId })
     void registroAnteriorId
@@ -218,33 +219,39 @@ export async function PUT(request: Request, { params }: Contexto) {
     })
     await validarFechaEnCadena(actual, datos.fechaEjecucion)
 
-    const obra = await estadoDeObra(raizId, id)
-    if (obra && datos.m2Ejecutados > obra.pendiente + 0.005) {
-      throw new ErrorApi(
-        409,
-        `A la obra solo le quedan ${obra.pendiente.toFixed(2)} ${obra.unidad} por ejecutar, sin contar este registro`,
-      )
-    }
-
-    // Si la jornada cambia de trabajador, cambia lo que se paga por ella: la
-    // tarifa congelada era la de la persona anterior.
+    // Si cambia el trabajador, se usa su precio.
     const cambioTrabajadorAvance = datos.trabajadorId !== actual.trabajadorId
     if (cambioTrabajadorAvance) await exigirPrecioAcordado(datos.trabajadorId, actual.actividadId)
-    const tarifaAvance = cambioTrabajadorAvance
-      ? await tarifaDeTrabajador(datos.trabajadorId, actual.actividadId)
-      : null
+    const tarifaAvance =
+      cambioTrabajadorAvance || sinPrecio
+        ? await tarifaDeTrabajador(datos.trabajadorId, actual.actividadId)
+        : null
 
-    const actualizado = await prisma.registroEjecucion.update({
-      where: { id },
-      data: {
-        ...datos,
-        ...(cambioTrabajadorAvance ? { valorM2: tarifaAvance } : {}),
-        horaInicio: aHora(horaInicio),
-        horaFinal: aHora(horaFinal),
-        // Trazabilidad: queda quien creo y quien modifico por ultima vez.
-        usuarioActualizaId: sesion.user.id,
-      },
-      include: relacionesRegistro,
+    const actualizado = await prisma.$transaction(async (tx) => {
+      // Mismo bloqueo que al crear un avance: primero la obra, luego la jornada.
+      await bloquearRegistros(tx, [raizId])
+      await bloquearRegistros(tx, [id])
+      await exigirNoPagado(tx, id, 'modificar')
+
+      const obra = await estadoDeObra(raizId, id, tx)
+      if (obra && datos.m2Ejecutados > obra.pendiente + 0.005) {
+        throw new ErrorApi(
+          409,
+          `A la obra solo le quedan ${obra.pendiente.toFixed(2)} ${obra.unidad} por ejecutar, sin contar este registro`,
+        )
+      }
+
+      return tx.registroEjecucion.update({
+        where: { id },
+        data: {
+          ...datos,
+          ...(cambioTrabajadorAvance || sinPrecio ? { valorM2: tarifaAvance } : {}),
+          horaInicio: horaADate(horaInicio),
+          horaFinal: horaADate(horaFinal),
+          usuarioActualizaId: sesion.user.id,
+        },
+        include: relacionesRegistro,
+      })
     })
 
     await sincronizarEstadoTarea(await tareaDeLaObra(raizId))
@@ -260,52 +267,52 @@ export async function DELETE(_request: Request, { params }: Contexto) {
     await exigirPermiso('registrar')
     const id = await idDeRuta(params)
 
-    const registro = await prisma.registroEjecucion.findUnique({
+    const base = await prisma.registroEjecucion.findUnique({
       where: { id },
-      select: {
-        codigoRegistro: true,
-        registroOrigenId: true,
-        tareaId: true,
-        liquidacion: { select: { codigo: true } },
-        continuacion: { select: { codigoRegistro: true } },
-        _count: { select: { avances: true } },
-      },
+      select: { registroOrigenId: true },
     })
-    if (!registro) throw new ErrorApi(404, 'El registro no existe')
+    if (!base) throw new ErrorApi(404, 'El registro no existe')
+    const raizId = base.registroOrigenId ?? id
 
-    if (registro.liquidacion) {
-      throw new ErrorApi(
-        409,
-        `No se puede eliminar: ${registro.codigoRegistro} ya se pago en la liquidacion ${registro.liquidacion.codigo}.`,
-      )
-    }
+    // Todo dentro de una transaccion con la obra bloqueada: no se cruza con una liquidacion.
+    const tareaId = await prisma.$transaction(async (tx) => {
+      await bloquearRegistros(tx, [raizId])
+      await bloquearRegistros(tx, [id])
+      await exigirNoPagado(tx, id, 'eliminar')
 
-    // Solo se puede borrar por el final de la cadena: quitar un eslabon del
-    // medio dejaria los avances siguientes colgando de la nada.
-    if (registro.continuacion) {
-      throw new ErrorApi(
-        409,
-        `No se puede eliminar: ${registro.codigoRegistro} tiene un avance posterior (${registro.continuacion.codigoRegistro}). Elimina primero el ultimo de la cadena.`,
-      )
-    }
-    if (registro.registroOrigenId === null && registro._count.avances > 0) {
-      throw new ErrorApi(
-        409,
-        'No se puede eliminar el registro que abre la obra mientras tenga avances',
-      )
-    }
+      const registro = await tx.registroEjecucion.findUniqueOrThrow({
+        where: { id },
+        select: {
+          codigoRegistro: true,
+          registroOrigenId: true,
+          tareaId: true,
+          continuacion: { select: { codigoRegistro: true } },
+          _count: { select: { avances: true } },
+          registroOrigen: { select: { tareaId: true } },
+        },
+      })
 
-    // La tarea de la obra se lee ANTES de borrar: si lo que se borra es la
-    // apertura, despues ya no habria de donde sacarla.
-    const tareaId =
-      registro.registroOrigenId === null
+      // Solo se borra el ultimo registro de la cadena.
+      if (registro.continuacion) {
+        throw new ErrorApi(
+          409,
+          `No se puede eliminar: ${registro.codigoRegistro} tiene un avance posterior (${registro.continuacion.codigoRegistro}). Elimina primero el ultimo de la cadena.`,
+        )
+      }
+      if (registro.registroOrigenId === null && registro._count.avances > 0) {
+        throw new ErrorApi(
+          409,
+          'No se puede eliminar el registro que abre la obra mientras tenga avances',
+        )
+      }
+
+      await tx.registroEjecucion.delete({ where: { id } })
+      return registro.registroOrigenId === null
         ? registro.tareaId
-        : await tareaDeLaObra(registro.registroOrigenId)
+        : (registro.registroOrigen?.tareaId ?? null)
+    })
 
-    await prisma.registroEjecucion.delete({ where: { id } })
-
-    // Al deshacer una jornada la tarea puede volver a EN_PROCESO, o a
-    // PENDIENTE si se borro la obra entera.
+    // Actualiza el estado de la tarea.
     await sincronizarEstadoTarea(tareaId)
 
     return ok({ mensaje: 'Registro eliminado' })

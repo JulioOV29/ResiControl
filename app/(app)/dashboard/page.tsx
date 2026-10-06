@@ -46,17 +46,17 @@ import { InformeDia } from '@/components/graficas/InformeDia'
 import type { Catalogos } from '@/types/dominio'
 
 type Panel = {
-  /** La unidad en que esta medido todo el panel. Nunca se mezclan. */
+  /** Unidad de todo el panel. */
   unidad: string
-  /** Las unidades que tienen jornadas con los filtros puestos. */
+  /** Unidades con jornadas en los filtros actuales. */
   unidades: Array<{ unidad: string; registros: number }>
   indicadores: {
     registros: number
     obras: number
     m2Totales: number
-    /** Producido dentro del rango de fechas filtrado. */
+    /** Ejecutado en el rango de fechas. */
     m2Ejecutados: number
-    /** Producido en las cadenas completas, hasta la fecha "hasta". */
+    /** Ejecutado en las cadenas completas, hasta la fecha "hasta". */
     m2Acumulados: number
     m2Pendientes: number
     m2Meta: number
@@ -88,7 +88,7 @@ type Panel = {
     horasEfectivas: number
     rendimiento: number | null
     registros: number
-    /** m2 del dia repartidos por actividad, con el id de la actividad de clave. */
+    /** Cantidad del dia por actividad (clave: id de la actividad). */
     porActividad: Record<string, number>
   }>
   porUbicacion: Array<{
@@ -140,7 +140,7 @@ const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'o
 
 const aFecha = (iso: string) => new Date(`${iso}T00:00:00.000Z`)
 
-/** "2026-09-09" -> "9 sep", que es como se lee una fecha en un eje. */
+/** "2026-09-09" -> "9 sep". */
 const fechaCorta = (iso: string) => {
   const d = aFecha(iso)
   return `${d.getUTCDate()} ${MESES[d.getUTCMonth()]}`
@@ -148,22 +148,15 @@ const fechaCorta = (iso: string) => {
 
 type Paso = 'dia' | 'semana' | 'mes'
 
-/** El lunes de la semana a la que pertenece una fecha, en formato aaaa-mm-dd. */
+/** Lunes de la semana de una fecha (aaaa-mm-dd). */
 function lunesDe(iso: string) {
   const d = aFecha(iso)
-  const dia = d.getUTCDay() // 0 domingo
+  const dia = d.getUTCDay() // 0 = domingo
   d.setUTCDate(d.getUTCDate() - (dia === 0 ? 6 : dia - 1))
   return d.toISOString().slice(0, 10)
 }
 
-/**
- * Agrupa los dias en el paso elegido y devuelve, ademas de lo producido en cada
- * periodo, lo acumulado hasta el.
- *
- * Los acumulados son el punto de la curva: responden "a estas alturas, cuanto
- * llevamos hecho contra cuanto deberiamos llevar", que es la pregunta que no
- * contesta una barra suelta por dia.
- */
+/** Agrupa los dias por dia, semana o mes, con lo producido y el acumulado. */
 function acumular(
   dias: Panel['porDia'],
   paso: Paso,
@@ -211,12 +204,10 @@ export default function DashboardPage() {
   const [filtros, setFiltros] = useState(filtrosVacios)
   const [rangoPuesto, setRangoPuesto] = useState(false)
   const [paso, setPaso] = useState<Paso>('dia')
-  /** El dia abierto en el informe del calendario. */
+  /** Dia abierto en el informe del calendario. */
   const [diaAbierto, setDiaAbierto] = useState<string | null>(null)
 
-  // Los filtros se aplican cuando el usuario deja de moverlos: un campo de
-  // fecha dispara onChange varias veces mientras se escribe y no tiene sentido
-  // recalcular el panel entero en cada una.
+  // Los filtros se aplican cuando el usuario deja de cambiarlos.
   const filtrosAplicados = useRetardo(filtros)
 
   const consulta = useMemo(() => {
@@ -228,58 +219,40 @@ export default function DashboardPage() {
 
   const { dato, cargando } = useRecursoUnico<Panel>(consulta)
 
-  // Un solo viaje para todos los desplegables. La jerarquia llega completa, y
-  // con ella las combinaciones que existen de verdad en los registros: con eso
-  // cada filtro sabe, sin volver al servidor, que opciones siguen teniendo
-  // trabajo detras despues de elegir los demas.
+  // Catalogos con las combinaciones reales, para los filtros relacionados.
   const { dato: catalogos, recargarEnSilencio: recargarCatalogos } =
     useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
 
-  // Al volver a esta pestana se piden otra vez los catalogos: lo que se haya
-  // dado de alta mientras tanto (una actividad, una cuadrilla) aparece en los
-  // filtros sin recargar la pagina.
+  // Recarga los catalogos al volver a la pestana.
   useRefrescoAlVolver(recargarCatalogos)
 
-  // --- Filtros relacionales ------------------------------------------------
-  // Cada fila es una combinacion real de ubicacion, actividad, cuadrilla y
-  // trabajador. Sin ellas (cargando, o sin registros) no se descarta nada.
+  // --- Filtros relacionados ---
   const filas = useMemo(
     () =>
       catalogos?.combinaciones ? expandirFilas(catalogos, catalogos.combinaciones) : [],
     [catalogos],
   )
 
-  // Para cada filtro, lo que sigue disponible dadas las elecciones de los demas.
+  // Opciones disponibles segun lo elegido en los demas filtros.
   const disponibles = useMemo(() => opcionesDisponibles(filas, filtros), [filas, filtros])
 
-  // Y lo que aparece en algun registro, sin mirar filtros: lo que no esta aqui
-  // es nuevo, y lo nuevo no se esconde.
+  // Ids que aparecen en algun registro.
   const conRegistros = useMemo(() => idsConRegistros(filas), [filas])
 
   /**
-   * Una opcion se ofrece si tiene trabajo compatible con los demas filtros
-   * (la regla relacional de siempre) o si no tiene trabajo en ninguna parte.
-   *
-   * Lo segundo es la excepcion: una actividad, una torre o una cuadrilla recien
-   * creada no esta en ningun registro, asi que la regla relacional no tiene nada
-   * que decir de ella, y la escondia justo el dia en que se da de alta. Sin
-   * registros no hay contradiccion posible con lo elegido: se ofrece.
+   * Se ofrece una opcion si es compatible con los demas filtros, o si aun no
+   * tiene registros (por ejemplo, una actividad recien creada).
    */
   const habilitada = (dimension: Dimension, id: number) =>
     filas.length === 0 ||
     disponibles[dimension].has(id) ||
     !conRegistros[dimension].has(id)
-  // Filtra una lista a lo que sigue teniendo registros: la opcion desaparece
-  // de la lista en vez de quedar en gris. Mientras los catalogos no traigan
-  // combinaciones (cargando) no se descarta nada.
+  // Quita de la lista lo que no esta disponible (mientras cargan, no quita nada).
   const soloDisponibles = <T extends { id: number }>(dimension: Dimension, lista: T[]) =>
     filas.length === 0 ? lista : lista.filter((x) => habilitada(dimension, x.id))
-  // Las listas de abajo no necesitan a conRegistros en sus dependencias: solo
-  // cambia cuando cambian las filas, y filas ya esta en todas.
 
   const proyectos = soloDisponibles('proyectoId', catalogos?.proyectos ?? [])
-  // Solo las actividades que se miden en la unidad del panel: elegir el filo
-  // (ml) mientras se mira en m2 no tiene sentido; se cambia primero la unidad.
+  // Solo actividades de la unidad del panel.
   const unidadVista = dato?.unidad ?? filtros.unidad
   const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? []).filter(
     (a) => !unidadVista || a.unidadMedida === unidadVista,
@@ -296,13 +269,9 @@ export default function DashboardPage() {
     [catalogos],
   )
 
-  // Las opciones se escriben en un solo sitio (lib/etiquetas), para que el
-  // panel, la pantalla de ejecucion y los formularios digan lo mismo.
   const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
-  const nombrePiso = etiquetas.nombrePiso
 
-  // La ubicacion se acota por lo que ya se eligio arriba (una torre solo ofrece
-  // sus pisos), y sobre eso cada opcion se deshabilita si no tiene registros.
+  // La ubicacion se acota por lo elegido arriba (una torre solo ofrece sus pisos).
   const torres = useMemo(
     () =>
       soloDisponibles(
@@ -311,9 +280,6 @@ export default function DashboardPage() {
           (t) => !filtros.proyectoId || t.proyectoId === Number(filtros.proyectoId),
         ),
       ),
-    // `disponibles` entra en las dependencias porque soloDisponibles lo usa:
-    // sin el, elegir una actividad o una cuadrilla no reducia esta lista hasta
-    // que cambiara otra cosa.
     [catalogos, filtros.proyectoId, filas, disponibles],
   )
 
@@ -371,9 +337,7 @@ export default function DashboardPage() {
     [zonasBase, filas, disponibles],
   )
 
-  // "Apto 305" existe en varias torres. Mientras el filtro de arriba no lo
-  // aclare, la etiqueta lleva la torre y el piso para que no se confundan, y
-  // siempre termina con el codigo del proyecto detras de un guion.
+  // Piso y zona llevan la torre mientras no haya una elegida ("Apto 305" se repite).
   const etiquetaPiso = (p: Catalogos['pisos'][number]) =>
     etiquetas.piso(p, { conTorre: !filtros.torreId })
 
@@ -394,8 +358,7 @@ export default function DashboardPage() {
     [catalogos, filtros.proyectoId, filas, disponibles],
   )
 
-  // La primera vez el rango se pone solo: de la obra mas antigua hasta hoy,
-  // para que se vea todo y no una tajada arbitraria.
+  // La primera vez, el rango va de la obra mas antigua hasta hoy.
   useEffect(() => {
     if (rangoPuesto || !dato?.rangoDisponible.desde) return
     setFiltros((f) => ({
@@ -406,19 +369,15 @@ export default function DashboardPage() {
     setRangoPuesto(true)
   }, [dato, rangoPuesto])
 
-  // Todo cambio de filtro pasa por aqui. Lo que se acaba de elegir manda: si
-  // choca con algo elegido antes (otra torre, un trabajador que nunca estuvo
-  // ahi), se suelta lo anterior, y asi nunca queda una combinacion sin datos
-  // que el residente no haya pedido.
+  // Aplica un cambio de filtro y suelta lo que ya no sea compatible.
   const cambiar = (campos: Partial<typeof filtrosVacios>) =>
     setFiltros((f) => {
-      // Elegir una actividad ya decide la unidad: la que estuviera puesta se
-      // suelta para que el panel pase a medir en la de esa actividad.
+      // Elegir actividad define la unidad.
       const extra = campos.actividadId ? { unidad: '' } : {}
       return conciliar(filas, { ...f, ...campos, ...extra }, Object.keys(campos))
     })
 
-  /** La unidad en que mide el panel. Todo lo que se pinta abajo va en ella. */
+  /** Unidad del panel. */
   const uni = dato?.unidad ?? (filtros.unidad || 'm2')
   const unidadesDisponibles = dato?.unidades ?? []
 
@@ -428,11 +387,7 @@ export default function DashboardPage() {
 
   const datosDia = (dato?.porDia ?? []).map((d) => ({ ...d, etiqueta: fechaCorta(d.fecha) }))
 
-  /**
-   * El informe arranca en el ultimo dia con trabajo, para que la mitad derecha
-   * no nazca vacia, y se queda en el dia elegido mientras ese dia siga
-   * existiendo con los filtros puestos.
-   */
+  /** El informe abre en el ultimo dia con trabajo. */
   const diasDelPeriodo = dato?.porDia ?? []
   const fechaInforme =
     diaAbierto && diasDelPeriodo.some((d) => d.fecha === diaAbierto)
@@ -444,8 +399,7 @@ export default function DashboardPage() {
   const datosActividad = dato?.porActividad ?? []
   const curva = useMemo(() => acumular(dato?.porDia ?? [], paso), [dato, paso])
 
-  // El periodo que realmente se esta viendo: lo que diga el filtro, y si no lo
-  // dice, del primer al ultimo dia con trabajo registrado.
+  // Periodo que se esta viendo: el del filtro o el de los registros.
   const periodo =
     datosDia.length === 0
       ? ''
@@ -453,7 +407,7 @@ export default function DashboardPage() {
           filtros.hasta || datosDia[datosDia.length - 1].fecha,
         )}`
 
-  /** Bajar de nivel desde la grafica: pulsar una torre filtra por esa torre. */
+  /** Al pulsar una barra de ubicacion se filtra por ella. */
   const bajarNivel = (clave: string) => {
     if (!dato) return
     if (dato.nivelUbicacion === 'torre') cambiar({ torreId: clave, pisoId: '', zonaId: '' })
@@ -541,11 +495,7 @@ export default function DashboardPage() {
           ))}
         </FiltroSeleccion>
 
-        {/*
-          La unidad va antes que la actividad porque la acota. Solo aparece
-          cuando hay jornadas en mas de una unidad: con una sola no hay nada que
-          elegir. No tiene opcion "Todas" a proposito: m2 y ml no se suman.
-        */}
+        {/* Unidad: solo aparece si hay mas de una (no hay opcion Todas) */}
         {(unidadesDisponibles.length > 1 || filtros.unidad) && (
           <FiltroSeleccion
             etiqueta="Unidad"
@@ -645,7 +595,7 @@ export default function DashboardPage() {
         </Tarjeta>
       ) : (
         <>
-          {/* Los cuatro indicadores que resumen el periodo filtrado */}
+          {/* Indicadores del periodo */}
           <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Indicador
               etiqueta="Produccion total"
@@ -695,7 +645,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="space-y-4">
-            {/* 1. Curva acumulada: lo ejecutado contra la meta, hasta la fecha */}
+            {/* 1. Curva acumulada: ejecutado contra meta */}
             <Grafica
               titulo="Evolucion de la produccion"
               descripcion="Acumulado de lo ejecutado frente al acumulado de la meta, a lo largo del periodo."
@@ -778,8 +728,7 @@ export default function DashboardPage() {
                     fill="url(#degradadoEjecutado)"
                     isAnimationActive={false}
                   />
-                  {/* La meta va punteada: se distingue del trazo real sin
-                      depender del color, que es lo que pide la accesibilidad. */}
+                  {/* Meta punteada */}
                   <Line
                     type="monotone"
                     dataKey="acumuladoMeta"
@@ -808,7 +757,7 @@ export default function DashboardPage() {
               </ResponsiveContainer>
             </Grafica>
 
-            {/* 2. Produccion por dia, con el reparto por actividad */}
+            {/* 2. Produccion por dia, con reparto por actividad */}
             <Grafica
               titulo="Produccion por dia"
               descripcion={`${uni} ejecutados en cada jornada. Solo aparecen los dias con trabajo registrado.`}
@@ -862,8 +811,7 @@ export default function DashboardPage() {
                               valor: formatoNumero(dia.m2Ejecutados),
                               color: paleta.serie1,
                             },
-                            // El desglose del dia, en el orden de la fila de
-                            // totales de arriba.
+                            // Desglose del dia.
                             ...datosActividad
                               .filter((a) => dia.porActividad[a.clave])
                               .map((a) => ({
@@ -885,7 +833,7 @@ export default function DashboardPage() {
               </ResponsiveContainer>
             </Grafica>
 
-            {/* 3. El mes como cuadricula: donde hay registros y donde hay huecos */}
+            {/* 3. Calendario de registros */}
             <Grafica
               titulo="Calendario de registros"
               descripcion="Los dias con trabajo van marcados. Pulsa uno para ver su informe al lado; el cursor por encima solo lo asoma."
@@ -900,10 +848,7 @@ export default function DashboardPage() {
                 formatoNumero(d.registros, 0),
               ])}
             >
-              {/*
-                Dos mitades de la misma tarjeta: a la izquierda el cuando, a la
-                derecha el que paso ese dia. En pantalla angosta se apilan.
-              */}
+              {/* Calendario a la izquierda, informe del dia a la derecha */}
               <div className="grid gap-5 md:grid-cols-2 md:gap-6">
                 <div className="md:border-r md:border-obra-100 md:pr-6">
                   <CalendarioRegistros
@@ -1024,7 +969,7 @@ export default function DashboardPage() {
                 </ResponsiveContainer>
               </Grafica>
 
-              {/* 4. Rendimiento por cuadrilla */}
+              {/* 5. Rendimiento por cuadrilla */}
               <Grafica
                 titulo="Rendimiento por cuadrilla"
                 descripcion={`${uni} por hora efectiva de cada cuadrilla.`}
@@ -1103,7 +1048,7 @@ export default function DashboardPage() {
               </Grafica>
             </div>
 
-            {/* 5. Avance por ubicacion */}
+            {/* 6. Avance por ubicacion */}
             <Grafica
               titulo={`Avance por ${NOMBRE_NIVEL[dato.nivelUbicacion]}`}
               descripcion="Lo acumulado sobre el area total. Pulsa una fila para bajar un nivel."
@@ -1161,7 +1106,7 @@ export default function DashboardPage() {
                             </span>
                             <span
                               className={`block text-[11px] ${
-                                completo ? 'text-emerald-600' : 'text-obra-400'
+                                completo ? 'text-menta-700' : 'text-obra-400'
                               }`}
                             >
                               {completo ? 'Completado' : `${formatoNumero(u.obras, 0)} obras`}

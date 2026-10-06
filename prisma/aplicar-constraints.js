@@ -1,7 +1,6 @@
 /**
- * Aplica las reglas de integridad de prisma/constraints.sql sobre la base de
- * datos. Correr siempre despues de "npx prisma db push", porque db push
- * reconstruye las tablas y puede borrar restricciones creadas a mano.
+ * Aplica prisma/constraints.sql en la base.
+ * Correr despues de cada "prisma db push", que puede borrar esas reglas.
  *
  *   npm run db:constraints
  */

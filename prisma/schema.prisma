@@ -1,32 +1,22 @@
-// ============================================================================
-//  ResiControl - Sistema de Gestion y Analisis de Informacion de Obra
-//  Modelo relacional. El centro del sistema es RegistroEjecucion: representa
-//  el hecho operativo que ocurre en la obra y del que se derivan todos los
-//  indicadores. Ningun indicador se almacena como columna, todos se calculan.
-// ============================================================================
+// ResiControl - modelo de datos.
+// El centro es RegistroEjecucion (un dia de trabajo). Los indicadores no se
+// guardan: se calculan en lib/calculos.ts.
 
 generator client {
   provider = "prisma-client-js"
 }
 
-/// La aplicacion habla con Neon por el endpoint con pool (PgBouncer) y las
-/// migraciones por el directo. Es lo que Neon recomienda y es la causa real del
-/// "prisma:error ... kind: Closed": el endpoint sin pool cierra la conexion
-/// cuando el proyecto se suspende por inactividad, y la siguiente consulta la
-/// encuentra muerta. PgBouncer la reabre por debajo sin que la app se entere.
-/// El DDL no puede pasar por el pool, y para eso esta directUrl.
+/// url: endpoint con pool (PgBouncer) para la app; evita conexiones cerradas
+/// cuando Neon se suspende. directUrl: endpoint directo para migraciones.
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
-// ---------------------------------------------------------------------------
-//  Enumeraciones
-// ---------------------------------------------------------------------------
+// --- Enumeraciones ---
 
-/// Roles de aplicacion. ADMIN gestiona todo incluidos usuarios, RESIDENTE
-/// registra ejecucion y consulta, SUPERVISOR solo consulta y genera informes.
+/// ADMIN: todo. RESIDENTE: gestiona obra y registra. SUPERVISOR: solo consulta.
 enum RolUsuario {
   ADMIN
   RESIDENTE
@@ -40,15 +30,14 @@ enum EstadoProyecto {
   FINALIZADO
 }
 
-/// Estado de avance de una torre o de un elemento constructivo.
-/// Como se eligio el lapso de una liquidacion. Las fechas desde y hasta son
-/// las que mandan; esto solo dice como se llego a ellas.
+/// Como se eligio el periodo de una liquidacion (las fechas son las que mandan).
 enum PeriodoLiquidacion {
   MES
   QUINCENA
   RANGO
 }
 
+/// Estado de avance de una torre o de un elemento.
 enum EstadoEjecucion {
   PENDIENTE
   EN_PROCESO
@@ -56,9 +45,7 @@ enum EstadoEjecucion {
   SUSPENDIDO
 }
 
-// ---------------------------------------------------------------------------
-//  Usuarios de la aplicacion (distinto de Trabajador)
-// ---------------------------------------------------------------------------
+// --- Usuarios del sistema (distinto de Trabajador) ---
 
 model Usuario {
   id           Int        @id @default(autoincrement()) @map("id_usuario")
@@ -69,10 +56,7 @@ model Usuario {
   rol          RolUsuario @default(RESIDENTE)
   activo       Boolean    @default(true)
 
-  /// Intentos de entrada fallidos seguidos, y hasta cuando esta bloqueada la
-  /// cuenta. Viven en la base y no en memoria porque en Vercel cada peticion
-  /// puede caer en una instancia distinta, y un contador en memoria no frena
-  /// nada. Se ponen a cero en cuanto la contrasena entra bien.
+  /// Intentos fallidos seguidos y fin del bloqueo. Se reinician al entrar bien.
   intentosFallidos Int       @default(0) @map("intentos_fallidos")
   bloqueadoHasta   DateTime? @map("bloqueado_hasta")
   createdAt    DateTime   @default(now()) @map("created_at")
@@ -86,10 +70,7 @@ model Usuario {
   @@map("usuarios")
 }
 
-// ---------------------------------------------------------------------------
-//  Jerarquia fisica de la obra
-//  Proyecto > Torre > Piso > Zona > Elemento constructivo
-// ---------------------------------------------------------------------------
+// --- Jerarquia de la obra: Proyecto > Torre > Piso > Zona > Elemento ---
 
 model Proyecto {
   id          Int            @id @default(autoincrement()) @map("id_proyecto")
@@ -140,7 +121,7 @@ model Piso {
   @@map("pisos")
 }
 
-/// Apartamentos, areas o zonas de trabajo dentro de un piso.
+/// Apartamento, area o zona de trabajo dentro de un piso.
 model Zona {
   id          Int     @id @default(autoincrement()) @map("id_zona")
   pisoId      Int     @map("id_piso")
@@ -157,9 +138,8 @@ model Zona {
   @@map("zonas")
 }
 
-/// Elemento fisico concreto sobre el que se ejecuta una actividad.
-/// codigoDwg no es unico globalmente: el mismo codigo puede repetirse en
-/// distintas ubicaciones, por eso la unicidad se define por zona.
+/// Elemento sobre el que se ejecuta una actividad (muro, losa...).
+/// codigoDwg se puede repetir en distintas zonas.
 model ElementoConstructivo {
   id          Int             @id @default(autoincrement()) @map("id_elemento")
   zonaId      Int             @map("id_zona")
@@ -168,15 +148,16 @@ model ElementoConstructivo {
   unidad      String?         @db.VarChar(20)
   estado      EstadoEjecucion @default(PENDIENTE)
 
-  /// Dimensiones del elemento. Se miden una sola vez, aqui, cuando se da de
-  /// alta el muro: es la cantidad que hay que ejecutar. La tarea que se asigne
-  /// sobre el elemento y el registro que abra la obra las heredan; el registro
-  /// ademas se queda con una copia, para que corregir el elemento manana no
-  /// altere los indicadores de lo que ya se midio.
+  /// Medidas del elemento. La tarea y el registro de obra las toman de aqui;
+  /// el registro guarda una copia.
   largo Decimal @db.Decimal(10, 2)
   alto  Decimal @db.Decimal(10, 2)
 
+  /// Suma del area de sus vanos. Se recalcula cada vez que se guarda el elemento.
+  areaVanos Decimal @default(0) @map("area_vanos") @db.Decimal(12, 2)
+
   zona      Zona                @relation(fields: [zonaId], references: [id], onDelete: Cascade)
+  vanos     Vano[]
   registros RegistroEjecucion[]
   tareas    Tarea[]
 
@@ -186,9 +167,21 @@ model ElementoConstructivo {
   @@map("elementos_constructivos")
 }
 
-// ---------------------------------------------------------------------------
-//  Catalogos
-// ---------------------------------------------------------------------------
+/// Hueco de un elemento (ventana, puerta...). Su area se resta de la del muro.
+model Vano {
+  id          Int     @id @default(autoincrement()) @map("id_vano")
+  elementoId  Int     @map("id_elemento")
+  descripcion String? @db.VarChar(100)
+  largo       Decimal @db.Decimal(10, 2)
+  ancho       Decimal @db.Decimal(10, 2)
+
+  elemento ElementoConstructivo @relation(fields: [elementoId], references: [id], onDelete: Cascade)
+
+  @@index([elementoId])
+  @@map("vanos")
+}
+
+// --- Catalogos ---
 
 model Actividad {
   id           Int     @id @default(autoincrement()) @map("id_actividad")
@@ -197,9 +190,7 @@ model Actividad {
   descripcion  String? @db.VarChar(255)
   activo       Boolean @default(true)
 
-  /// La actividad no lleva precio: lo que se paga por metro depende de quien lo
-  /// ejecuta, y por eso vive en TrabajadorActividad. Una misma cuadrilla puede
-  /// tener al oficial a un precio y al ayudante a otro por el mismo pañete.
+  /// El precio no va en la actividad: depende del trabajador (TrabajadorActividad).
   metas     Meta[]
   registros RegistroEjecucion[]
   tarifas   TrabajadorActividad[]
@@ -220,11 +211,9 @@ model Cargo {
   @@map("cargos")
 }
 
-// ---------------------------------------------------------------------------
-//  Personal de obra
-// ---------------------------------------------------------------------------
+// --- Personal de obra ---
 
-/// Persona que ejecuta actividades fisicas en la obra. No necesita cuenta.
+/// Persona que trabaja en la obra. No necesita cuenta en el sistema.
 model Trabajador {
   id        Int      @id @default(autoincrement()) @map("id_trabajador")
   documento String?  @unique @db.VarChar(30)
@@ -246,15 +235,8 @@ model Trabajador {
   @@map("trabajadores")
 }
 
-/// Lo que se le paga a UN trabajador por metro de UNA actividad.
-///
-/// El precio se acuerda con la persona, no con la actividad: el mismo pañete
-/// se paga distinto al oficial que al ayudante. Por eso se captura al dar de
-/// alta al trabajador y no en el catalogo de actividades.
-///
-/// Es la tarifa VIGENTE. Lo ya registrado no se altera al cambiarla, porque
-/// cada jornada guarda copiado el valor que estaba puesto el dia que se
-/// guardo, igual que hace con la meta.
+/// Precio por unidad de UNA actividad para UN trabajador (el vigente).
+/// Cada jornada guarda una copia, asi un cambio no altera lo ya registrado.
 model TrabajadorActividad {
   id           Int     @id @default(autoincrement()) @map("id_trabajador_actividad")
   trabajadorId Int     @map("id_trabajador")
@@ -264,8 +246,7 @@ model TrabajadorActividad {
   trabajador Trabajador @relation(fields: [trabajadorId], references: [id], onDelete: Cascade)
   actividad  Actividad  @relation(fields: [actividadId], references: [id], onDelete: Cascade)
 
-  /// Un solo precio por trabajador y actividad: dos filas para la misma pareja
-  /// serian dos verdades sobre lo mismo.
+  /// Un solo precio por trabajador y actividad.
   @@unique([trabajadorId, actividadId])
   @@index([trabajadorId])
   @@index([actividadId])
@@ -289,9 +270,8 @@ model Cuadrilla {
   @@map("cuadrillas")
 }
 
-/// Relacion muchos a muchos entre cuadrillas y trabajadores con historial:
-/// un trabajador puede pasar de una cuadrilla a otra y la asignacion anterior
-/// se conserva cerrando fechaFin y marcando activo en falso.
+/// Historial de asignaciones de trabajadores a cuadrillas.
+/// Al cambiar de cuadrilla, la asignacion anterior se cierra (fechaFin, activo = false).
 model CuadrillaTrabajador {
   id           Int       @id @default(autoincrement()) @map("id_cuadrilla_trabajador")
   cuadrillaId  Int       @map("id_cuadrilla")
@@ -309,8 +289,7 @@ model CuadrillaTrabajador {
   @@map("cuadrilla_trabajador")
 }
 
-/// Objetivo contra el cual se evalua la ejecucion. Una misma actividad puede
-/// tener metas distintas segun proyecto, cargo o periodo de vigencia.
+/// Meta por actividad, segun proyecto, cargo y vigencia.
 model Meta {
   id                  Int       @id @default(autoincrement()) @map("id_meta")
   proyectoId          Int       @map("id_proyecto")
@@ -330,33 +309,19 @@ model Meta {
   @@map("metas")
 }
 
-// ---------------------------------------------------------------------------
-//  Tareas asignadas
-// ---------------------------------------------------------------------------
+// --- Tareas asignadas ---
 
-/// El trabajo que el residente encarga, antes de que se ejecute.
-///
-/// Lleva los mismos datos con los que luego se registra la jornada: donde, que
-/// actividad, con que medidas, quien lo hace, para cuando y con que meta. El
-/// registro que abre la obra los hereda COPIADOS, no por referencia, por la
-/// misma razon que la meta y la tarifa: corregir la tarea manana no puede
-/// cambiar lo que se midio ayer.
-///
-/// Una tarea da lugar a una sola obra (de ahi el unique en el registro), y los
-/// avances siguen heredando del registro de obra, no de la tarea.
+/// Trabajo encargado antes de ejecutarse. El registro que abre la obra copia
+/// sus datos. Una tarea da lugar a una sola obra.
 model Tarea {
   id             Int             @id @default(autoincrement()) @map("id_tarea")
   codigo         String          @unique @db.VarChar(30)
   elementoId       Int             @map("id_elemento")
   actividadId    Int             @map("id_actividad")
-  /// A quien se le asigna. Opcional: se puede programar el trabajo antes de
-  /// saber que cuadrilla lo tomara.
+  /// A quien se asigna (opcional).
   cuadrillaId    Int?            @map("id_cuadrilla")
   trabajadorId   Int?            @map("id_trabajador")
-  /// Las medidas no se repiten aqui: son las del elemento constructivo, que es
-  /// donde se miden una sola vez. La cantidad por ejecutar de la tarea es el
-  /// area de su elemento.
-  /// Meta de produccion diaria que hereda el registro.
+  /// Meta diaria que hereda el registro.
   m2Meta         Decimal?        @map("m2_meta") @db.Decimal(12, 2)
   fechaInicioPlan DateTime?      @map("fecha_inicio_plan") @db.Date
   fechaFinPlan    DateTime?      @map("fecha_fin_plan") @db.Date
@@ -372,8 +337,7 @@ model Tarea {
   trabajador    Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: SetNull)
   usuarioAsigna Usuario       @relation("TareaAsignadaPor", fields: [usuarioAsignaId], references: [id], onDelete: Restrict)
 
-  /// La obra que nacio de esta tarea. Como maximo una: el unique vive en el
-  /// registro, en id_tarea.
+  /// Obra que nacio de la tarea (maximo una).
   registro RegistroEjecucion?
 
   @@index([elementoId])
@@ -384,21 +348,12 @@ model Tarea {
   @@map("tareas")
 }
 
-// ---------------------------------------------------------------------------
-//  Tabla central: las jornadas de trabajo
-// ---------------------------------------------------------------------------
+// --- Registros de obra (tabla central) ---
 
 /// Un dia de trabajo sobre un elemento.
-///
-/// El primer registro de una obra abre el trabajo y lleva las dimensiones del
-/// elemento. Los registros siguientes son avances: no repiten las medidas, solo
-/// apuntan al registro anterior con registroAnteriorId, y guardan ademas el
-/// registro que abrio la obra en registroOrigenId.
-///
-/// Esas dos referencias cumplen papeles distintos y por eso conviven:
-///   registroAnteriorId  es lo que el residente ve y abre desde la pantalla
-///   registroOrigenId    es lo que usan los calculos para contar el area de la
-///                       obra una sola vez, sin recorrer la cadena entera
+/// El primer registro abre la obra y guarda las medidas; los siguientes son avances.
+///   registroAnteriorId: el dia anterior (para navegar la cadena)
+///   registroOrigenId:   el registro que abrio la obra (para los calculos)
 model RegistroEjecucion {
   id                 Int      @id @default(autoincrement()) @map("id_ejecucion")
   codigoRegistro     String   @unique @map("codigo_registro") @db.VarChar(30)
@@ -410,55 +365,41 @@ model RegistroEjecucion {
   usuarioRegistraId  Int      @map("id_usuario_registra")
   usuarioActualizaId Int?     @map("id_usuario_actualiza")
 
-  /// La tarea que dio origen a esta obra, si nacio de una. Solo la lleva el
-  /// registro que abre la obra; los avances la heredan a traves de el. Es unico
-  /// porque una tarea da lugar a una sola obra.
+  /// Tarea de origen. Solo en la apertura; es unica.
   tareaId Int? @unique @map("id_tarea")
 
-  /// Encadenamiento de la obra.
+  /// Cadena de la obra.
   registroAnteriorId Int? @unique @map("id_registro_anterior")
   registroOrigenId   Int? @map("id_registro_origen")
 
-  /// Numero del subregistro dentro de su obra: 1, 2, 3... Nulo en el registro
-  /// que abre la obra. Se muestra como SR1, SR2 al lado del codigo de la obra.
+  /// Numero de avance (SR1, SR2...). Null en la apertura.
   numeroAvance Int? @map("numero_avance")
 
-  /// Dimensiones del elemento. Solo las lleva el registro que abre la obra.
+  /// Medidas del elemento. Solo en la apertura.
   largo Decimal? @db.Decimal(10, 2)
   alto  Decimal? @db.Decimal(10, 2)
 
-  /// Cantidad total de la obra, en la unidad de su actividad: es lo que marca el
-  /// 100%. Solo la lleva el registro que abre la obra. Sale del elemento cuando
-  /// la unidad lo permite (m2 = largo x alto, ml = largo) y la escribe el
-  /// residente cuando no (und, m3, kg). Se guarda copiada por la misma razon que
-  /// largo y alto: corregir el elemento manana no mueve lo ya medido.
+  /// Cantidad total de la obra en la unidad de su actividad (el 100%). Solo en la apertura.
+  /// m2 = largo x alto, ml = largo; und, m3 y kg la escribe el residente.
   cantidadTotal Decimal? @map("cantidad_total") @db.Decimal(12, 2)
 
-  /// Cantidad producida en este dia, no el total de la obra.
+  /// Cantidad ejecutada ese dia.
   m2Ejecutados Decimal @map("m2_ejecutados") @db.Decimal(12, 2)
 
   horaInicio      DateTime @map("hora_inicio") @db.Time(0)
   horaFinal       DateTime @map("hora_final") @db.Time(0)
   tiempoRecesoMin Int      @default(0) @map("tiempo_receso_min")
 
-  /// Meta del dia. Se copia de Meta al guardar para que un cambio posterior de
-  /// meta no altere los indicadores historicos.
+  /// Meta del dia, copiada al guardar.
   m2Meta Decimal? @map("m2_meta") @db.Decimal(12, 2)
 
-  /// Tarifa por unidad que tenia el TRABAJADOR para esa actividad el dia que se
-  /// guardo esta jornada. Se copia por la misma razon que m2Meta, y aqui pesa
-  /// mas: subirle el precio del pañete a alguien en marzo no puede reliquidar
-  /// lo que se le pago en enero.
-  /// Lo pagado por la jornada es m2_ejecutados * valor_m2. Queda nulo si la
-  /// jornada no tiene trabajador, o si ese trabajador no tiene precio acordado
-  /// para esa actividad.
+  /// Precio por unidad del trabajador, copiado al guardar.
+  /// Pago de la jornada = m2_ejecutados * valor_m2.
   valorM2 Decimal? @map("valor_m2") @db.Decimal(12, 2)
 
   observaciones String? @db.Text
 
-  /// La liquidacion en la que se pago esta jornada. Nula mientras no se haya
-  /// pagado. Una jornada pagada ya no se edita ni se borra: cambiarla
-  /// cambiaria lo que dice un pago ya hecho.
+  /// Liquidacion en que se pago. Una jornada pagada no se edita ni se borra.
   liquidacionId Int? @map("id_liquidacion")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -468,26 +409,21 @@ model RegistroEjecucion {
   elemento           ElementoConstructivo @relation(fields: [elementoId], references: [id], onDelete: Restrict)
   actividad        Actividad     @relation(fields: [actividadId], references: [id], onDelete: Restrict)
   cuadrilla        Cuadrilla     @relation(fields: [cuadrillaId], references: [id], onDelete: Restrict)
-  /// Restrict y no SetNull: la jornada guarda lo que se le pago a esa persona
-  /// (valor_m2), y borrar al trabajador la dejaba pagada sin dueño. Un
-  /// trabajador que ya trabajo se desactiva, no se borra.
+  /// Restrict: un trabajador con jornadas no se puede borrar (se desactiva).
   trabajador       Trabajador?   @relation(fields: [trabajadorId], references: [id], onDelete: Restrict)
   usuarioRegistra  Usuario       @relation("RegistroCreadoPor", fields: [usuarioRegistraId], references: [id], onDelete: Restrict)
   usuarioActualiza Usuario?      @relation("RegistroActualizadoPor", fields: [usuarioActualizaId], references: [id], onDelete: SetNull)
 
-  /// El dia anterior de esta misma obra. Es la referencia que se abre desde la
-  /// pantalla para ver de donde viene el avance.
+  /// Registro anterior de la obra.
   registroAnterior RegistroEjecucion? @relation("Continuacion", fields: [registroAnteriorId], references: [id], onDelete: Restrict)
-  /// El dia siguiente, si ya se registro. Uno como maximo, por eso el unique.
+  /// Registro siguiente (como maximo uno).
   continuacion     RegistroEjecucion? @relation("Continuacion")
 
-  /// El registro que abrio la obra, y los avances que cuelgan de el.
+  /// Registro que abrio la obra y sus avances.
   registroOrigen RegistroEjecucion?  @relation("Obra", fields: [registroOrigenId], references: [id], onDelete: Cascade)
   avances        RegistroEjecucion[] @relation("Obra")
 
-  /// La tarea de la que salio esta obra. Al borrar la tarea el registro se
-  /// queda, solo pierde el vinculo: lo ejecutado no desaparece porque alguien
-  /// borre la asignacion.
+  /// Tarea de origen. Si se borra la tarea, el registro se conserva.
   tarea Tarea? @relation(fields: [tareaId], references: [id], onDelete: SetNull)
 
   @@index([fechaEjecucion])
@@ -502,20 +438,11 @@ model RegistroEjecucion {
   @@map("registros_ejecucion")
 }
 
-// ---------------------------------------------------------------------------
-//  Liquidaciones: el pago de lo producido
-// ---------------------------------------------------------------------------
+// --- Liquidaciones ---
 
-/// Un pago a un trabajador por lo que ejecuto en un lapso.
-///
-/// Se calcula con la tarifa congelada en cada jornada (valor_m2), no con la
-/// tarifa vigente: lo que vale el trabajo se decidio el dia que se hizo. Cada
-/// jornada pagada queda marcada con la liquidacion (id_liquidacion en el
-/// registro), y asi no se puede pagar dos veces.
-///
-/// Las lineas guardan el resumen tal como se pago: actividad, precio, cantidad
-/// y subtotal. Son una foto: corregir despues el nombre de una actividad no
-/// cambia lo que dice el comprobante.
+/// Pago a un trabajador por lo que ejecuto en un periodo.
+/// Usa el precio copiado en cada jornada. Las jornadas pagadas quedan marcadas
+/// con id_liquidacion para no pagarlas dos veces.
 model Liquidacion {
   id            Int                @id @default(autoincrement()) @map("id_liquidacion")
   codigo        String             @unique @db.VarChar(30)
@@ -524,13 +451,12 @@ model Liquidacion {
   desde         DateTime           @db.Date
   hasta         DateTime           @db.Date
   total         Decimal            @db.Decimal(14, 2)
-  /// A donde se deposita. El numero es obligatorio; banco y tipo ayudan a quien
-  /// hace la transferencia.
+  /// Cuenta de deposito. El numero es obligatorio.
   banco         String?            @db.VarChar(80)
   tipoCuenta    String?            @map("tipo_cuenta") @db.VarChar(20)
   numeroCuenta  String             @map("numero_cuenta") @db.VarChar(40)
   observaciones String?            @db.Text
-  /// El responsable: quien genero la liquidacion.
+  /// Responsable: quien hizo la liquidacion.
   usuarioLiquidaId Int             @map("id_usuario_liquida")
   createdAt     DateTime           @default(now()) @map("created_at")
 
@@ -544,13 +470,12 @@ model Liquidacion {
   @@map("liquidaciones")
 }
 
-/// Un renglon del pago: una actividad a un precio. Si el precio de esa
-/// actividad cambio dentro del lapso, salen dos renglones, uno por precio.
+/// Renglon del pago: una actividad a un precio.
 model LiquidacionLinea {
   id            Int     @id @default(autoincrement()) @map("id_liquidacion_linea")
   liquidacionId Int     @map("id_liquidacion")
   actividadId   Int     @map("id_actividad")
-  /// Copia del nombre y la unidad de la actividad el dia del pago.
+  /// Copia del nombre y la unidad de la actividad al pagar.
   actividadNombre String  @map("actividad_nombre") @db.VarChar(100)
   unidad        String  @db.VarChar(20)
   valorUnitario Decimal @map("valor_unitario") @db.Decimal(12, 2)

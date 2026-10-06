@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client'
 
-// Singleton: en desarrollo Next.js recarga los modulos en cada cambio y sin
-// esto se abririan decenas de conexiones contra Neon hasta agotar el pool.
+// Una sola instancia: en desarrollo Next recarga modulos y abriria
+// conexiones de mas.
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
 
 export const prisma =

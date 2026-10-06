@@ -1,12 +1,10 @@
 import { cn } from '@/lib/utils'
 
 const tonos = {
-  neutro: 'bg-obra-100 text-obra-700',
-  exito: 'bg-emerald-100 text-emerald-700',
-  aviso: 'bg-acento-100 text-acento-800',
-  peligro: 'bg-red-100 text-red-700',
-  // Azul de marca y no el sky de Tailwind: es el mismo color de accion del menu
-  // y de las graficas, para que "en proceso" se lea del mismo juego.
+  neutro: 'bg-obra-100 text-obra-600',
+  exito: 'bg-menta-50 text-menta-700',
+  aviso: 'bg-acento-50 text-acento-700',
+  peligro: 'bg-red-50 text-red-700',
   info: 'bg-marca-50 text-marca-700',
 } as const
 
@@ -15,18 +13,15 @@ export type Tono = keyof typeof tonos
 export function Insignia({
   children,
   tono = 'neutro',
-  className,
 }: {
   children: React.ReactNode
   tono?: Tono
-  className?: string
 }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium',
+        'inline-flex items-center rounded-md px-2 py-1 text-xs font-medium leading-none',
         tonos[tono],
-        className,
       )}
     >
       {children}
@@ -34,7 +29,7 @@ export function Insignia({
   )
 }
 
-/** Tono visual asociado a cada estado del dominio. */
+/** Tono de color de cada estado. */
 export function tonoEstado(estado: string): Tono {
   switch (estado) {
     case 'TERMINADO':
@@ -50,7 +45,7 @@ export function tonoEstado(estado: string): Tono {
   }
 }
 
-/** Texto legible de los enums del dominio. */
+/** Texto legible de un estado. */
 export function textoEstado(estado: string) {
   return estado.charAt(0) + estado.slice(1).toLowerCase().replace(/_/g, ' ')
 }

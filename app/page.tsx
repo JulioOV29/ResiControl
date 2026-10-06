@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 
 export default function Home() {
-  // El layout de la aplicacion redirige a /login cuando no hay sesion.
+  // Sin sesion, el layout de la app redirige a /login.
   redirect('/dashboard')
 }

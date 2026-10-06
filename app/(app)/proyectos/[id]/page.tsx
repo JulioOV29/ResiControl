@@ -16,14 +16,10 @@ import { FormPiso } from '@/components/formularios/FormPiso'
 import { FormZona } from '@/components/formularios/FormZona'
 import { FormElemento } from '@/components/formularios/FormElemento'
 import { formatoNumero } from '@/lib/utils'
+import { cantidadDelElemento, normalizarUnidad } from '@/lib/dominio'
 import type { Elemento, Piso, Proyecto, Torre, Zona } from '@/types/dominio'
 
-/**
- * Detalle del proyecto con navegacion por niveles:
- * Torres -> Pisos -> Zonas -> Elementos constructivos.
- * Un solo componente evita cuatro rutas anidadas y mantiene la ruta migada
- * siempre visible, que es como el residente piensa la obra.
- */
+/** Detalle del proyecto por niveles: Torres -> Pisos -> Zonas -> Elementos. */
 export default function ProyectoDetallePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const puede = usePuede()
@@ -160,21 +156,27 @@ export default function ProyectoDetallePage({ params }: { params: Promise<{ id: 
       render: (f) => <span className="font-medium text-obra-900">{f.descripcion}</span>,
     },
     {
-      // Las medidas son la cantidad por ejecutar del elemento: se ven aqui
-      // porque es donde se definen, y de aqui las heredan tarea y registro.
+      // m2 = area neta (menos vanos), ml = largo; otras unidades se escriben al abrir la obra.
       clave: 'medidas',
       titulo: 'Medidas',
       alineacion: 'derecha',
-      render: (f) => (
-        <span>
-          <span className="block tabular-nums text-obra-900">
-            {formatoNumero(f.largo * f.alto)} {f.unidad || 'm2'}
+      render: (f) => {
+        const vanos = f.vanos?.length ?? 0
+        const unidad = normalizarUnidad(f.unidad)
+        const cantidad = cantidadDelElemento(unidad, f.largo, f.alto, f.areaVanos)
+        return (
+          <span>
+            <span className="block tabular-nums text-obra-900">
+              {cantidad === null ? unidad : `${formatoNumero(cantidad)} ${unidad}`}
+            </span>
+            <span className="block text-xs tabular-nums text-obra-500">
+              {formatoNumero(f.largo)} x {formatoNumero(f.alto)} m
+              {vanos > 0 && unidad === 'm2' &&
+                ` − ${vanos} vano${vanos === 1 ? '' : 's'} (${formatoNumero(f.areaVanos)} m2)`}
+            </span>
           </span>
-          <span className="block text-xs tabular-nums text-obra-500">
-            {formatoNumero(f.largo)} x {formatoNumero(f.alto)} m
-          </span>
-        </span>
-      ),
+        )
+      },
     },
     {
       clave: 'registros',

@@ -1,23 +1,49 @@
-/**
- * Piezas de consulta compartidas entre rutas. Viven aqui y no en un route.ts
- * porque Next.js solo admite exportar los manejadores HTTP desde esos archivos.
- */
-import type { Prisma } from '@prisma/client'
+/** Consultas y validaciones que comparten varias rutas de la API. */
+import type { Prisma, PrismaClient } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { ErrorApi } from '@/lib/api'
 import { cantidadDeObra } from '@/lib/calculos'
-import { cantidadDelElemento, modoCantidad, normalizarUnidad } from '@/lib/dominio'
+import { cantidadDelElemento, fechaExiste, modoCantidad, normalizarUnidad } from '@/lib/dominio'
 
-/** La ubicacion completa de un elemento, desde la zona hasta el proyecto. */
+/** Cliente normal o el de una transaccion. */
+type Cliente = PrismaClient | Prisma.TransactionClient
+
+/**
+ * Bloquea filas de registros hasta que termine la transaccion.
+ * Asi una edicion, un borrado y una liquidacion no se cruzan.
+ */
+export async function bloquearRegistros(tx: Prisma.TransactionClient, ids: number[]) {
+  const unicos = [...new Set(ids)].sort((a, b) => a - b)
+  for (const id of unicos) {
+    await tx.$queryRaw`SELECT id_ejecucion FROM registros_ejecucion WHERE id_ejecucion = ${id} FOR UPDATE`
+  }
+}
+
+/** Una jornada pagada no se modifica ni se borra. */
+export async function exigirNoPagado(cliente: Cliente, id: number, accion: string) {
+  const registro = await cliente.registroEjecucion.findUnique({
+    where: { id },
+    select: { codigoRegistro: true, liquidacion: { select: { codigo: true } } },
+  })
+  if (!registro) throw new ErrorApi(404, 'El registro no existe')
+  if (registro.liquidacion) {
+    throw new ErrorApi(
+      409,
+      `${registro.codigoRegistro} ya se pago en la liquidacion ${registro.liquidacion.codigo}: no se puede ${accion}. Si hay un error, un administrador tiene que anular esa liquidacion primero.`,
+    )
+  }
+}
+
+/** Ubicacion completa de un elemento: zona, piso, torre y proyecto. */
 const ubicacionElemento = {
   select: {
     id: true,
     codigoDwg: true,
     descripcion: true,
     unidad: true,
-    // Las medidas viven en el elemento: la tarea y el registro las heredan.
     largo: true,
     alto: true,
+    areaVanos: true,
     zona: {
       select: {
         id: true,
@@ -43,7 +69,7 @@ const ubicacionElemento = {
   },
 } as const
 
-/** Lo minimo para mostrar un registro como referencia clicable. */
+/** Datos minimos de un registro para enlazarlo. */
 const resumenRegistro = {
   select: {
     id: true,
@@ -57,7 +83,7 @@ const resumenRegistro = {
   },
 } as const
 
-/** Relaciones que acompañan a cada registro en listados e informes. */
+/** Relaciones que acompanan a cada registro en los listados. */
 export const relacionesRegistro = {
   elemento: ubicacionElemento,
   actividad: { select: { id: true, nombre: true, unidadMedida: true } },
@@ -71,26 +97,19 @@ export const relacionesRegistro = {
     },
   },
   usuarioRegistra: { select: { id: true, nombre: true, apellido: true } },
-  /// El dia anterior de la obra: es la referencia que se abre desde la lista.
+  /// Registro anterior de la obra.
   registroAnterior: resumenRegistro,
-  /// El registro que abrio la obra, de donde salen las medidas del elemento.
+  /// Registro que abrio la obra.
   registroOrigen: resumenRegistro,
-  /// El dia siguiente, si ya existe.
+  /// Registro siguiente, si existe.
   continuacion: { select: { id: true, codigoRegistro: true, fechaEjecucion: true } },
-  /// La tarea de la que nacio la obra, para poder volver al encargo.
+  /// Tarea de la que nacio la obra.
   tarea: { select: { id: true, codigo: true } },
-  /// La liquidacion en que se pago, si ya se pago.
+  /// Liquidacion en que se pago.
   liquidacion: { select: { id: true, codigo: true } },
 } as const
 
-/**
- * Lo minimo para calcular indicadores: los numeradores, los denominadores y a
- * que obra pertenece cada jornada.
- *
- * Existe porque sumar m2 y horas no necesita saber quien registro la jornada ni
- * como se llama la actividad. Traer relacionesRegistro entero para acabar
- * sumando dos columnas son siete joins y varios kilobytes por fila tirados.
- */
+/** Solo los campos que usan los calculos de indicadores (evita joins de mas). */
 export const camposIndicadores = {
   id: true,
   registroOrigenId: true,
@@ -105,10 +124,7 @@ export const camposIndicadores = {
   registroOrigen: { select: { largo: true, alto: true, cantidadTotal: true } },
 } as const
 
-/**
- * Lo anterior mas lo justo para agrupar: por dia, por actividad, por ubicacion
- * y por cuadrilla.
- */
+/** Campos de indicadores mas los necesarios para agrupar en el panel. */
 export const camposPanel = {
   ...camposIndicadores,
   fechaEjecucion: true,
@@ -139,14 +155,19 @@ export const camposPanel = {
   },
 } as const
 
-/** Traduce los parametros de la url a un filtro de registros. */
+/** Convierte los parametros de la url en un filtro de registros. */
 export function filtroRegistros(
   parametros: URLSearchParams,
 ): Prisma.RegistroEjecucionWhereInput {
   const where: Prisma.RegistroEjecucionWhereInput = {}
 
-  const desde = parametros.get('desde')
-  const hasta = parametros.get('hasta')
+  // Fechas mal escritas se ignoran (no rompen la consulta).
+  const fechaValida = (clave: string) => {
+    const v = parametros.get(clave)
+    return v && /^\d{4}-\d{2}-\d{2}$/.test(v) && fechaExiste(v) ? v : null
+  }
+  const desde = fechaValida('desde')
+  const hasta = fechaValida('hasta')
   if (desde || hasta) {
     where.fechaEjecucion = {
       ...(desde ? { gte: new Date(`${desde}T00:00:00.000Z`) } : {}),
@@ -162,9 +183,7 @@ export function filtroRegistros(
   const actividadId = numero('actividadId')
   if (actividadId) where.actividadId = actividadId
 
-  // La unidad en que se mide la actividad. Sumar m2 con metros lineales o con
-  // unidades da un numero que no es nada, asi que el panel filtra siempre por
-  // una sola.
+  // Unidad de la actividad (m2, ml, und...). El panel nunca mezcla unidades.
   const unidad = parametros.get('unidad')
   if (unidad) where.actividad = { unidadMedida: unidad }
 
@@ -174,12 +193,11 @@ export function filtroRegistros(
   const trabajadorId = numero('trabajadorId')
   if (trabajadorId) where.trabajadorId = trabajadorId
 
-  // Por cargo se filtra a traves del trabajador, que es quien lo lleva.
+  // El cargo se filtra por el trabajador.
   const cargoId = numero('cargoId')
   if (cargoId) where.trabajador = { cargoId }
 
-  // La ubicacion filtra por el nivel mas especifico informado: filtrar por zona
-  // ya implica el piso, la torre y el proyecto.
+  // Se usa el nivel de ubicacion mas especifico que llegue.
   const elementoId = numero('elementoId')
   const zonaId = numero('zonaId')
   const pisoId = numero('pisoId')
@@ -192,25 +210,16 @@ export function filtroRegistros(
   else if (torreId) where.elemento = { zona: { piso: { torreId } } }
   else if (proyectoId) where.elemento = { zona: { piso: { torre: { proyectoId } } } }
 
-  // Solo los registros que abren obra, para listar obras en lugar de jornadas.
+  // Solo registros que abren obra.
   if (parametros.get('soloAperturas') === '1') where.registroOrigenId = null
 
   return where
 }
 
 /**
- * La tarifa vigente de un trabajador para una actividad, para congelarla en la
- * jornada que se esta guardando.
- *
- * El precio se acuerda con la persona, asi que depende de la pareja
- * (trabajador, actividad) y no de la actividad sola. Devuelve null cuando la
- * jornada no tiene trabajador, o cuando ese trabajador no tiene precio
- * acordado para esa actividad: la jornada se guarda igual, sin importe.
- *
- * Se congela por la misma razon que la meta: lo que vale el trabajo se decide
- * el dia que se hace. Si se leyera al liquidar, subirle el precio a alguien en
- * marzo cambiaria de golpe lo que se le pago en enero, y eso no es un
- * indicador desactualizado sino una cuenta equivocada.
+ * Precio vigente del trabajador para la actividad, para copiarlo en la jornada.
+ * null si no hay trabajador o no tiene precio para esa actividad.
+ * Se copia para que un cambio de precio futuro no altere lo ya registrado.
  */
 export async function tarifaDeTrabajador(
   trabajadorId: number | null | undefined,
@@ -224,22 +233,16 @@ export async function tarifaDeTrabajador(
   return tarifa?.valorM2 ?? null
 }
 
-/** "07:30" -> Date apto para un campo TIME de PostgreSQL. */
-export function aHora(texto: string) {
-  const [h, m] = texto.split(':').map(Number)
-  return new Date(Date.UTC(1970, 0, 1, h, m, 0))
-}
-
-/** Suma los m2 ejecutados de un conjunto de registros. */
-export function sumarEjecutado(registros: Array<{ m2Ejecutados: unknown }>): number {
+/** Suma lo ejecutado de varios registros. */
+function sumarEjecutado(registros: Array<{ m2Ejecutados: unknown }>): number {
   let total = 0
   for (const r of registros) total += Number(String(r.m2Ejecutados))
   return total
 }
 
 /**
- * El ultimo registro de una cadena, que es al que hay que encadenar el
- * siguiente avance: el unico que todavia no tiene continuacion.
+ * Ultimo registro de la cadena (el que no tiene continuacion).
+ * A el se encadena el siguiente avance.
  */
 export function ultimoDeCadena(
   raiz: { id: number; codigoRegistro: string; continuacion: unknown },
@@ -251,14 +254,15 @@ export function ultimoDeCadena(
 }
 
 /**
- * Estado de una obra completa a partir de cualquiera de sus registros.
- * Devuelve el area del elemento, lo acumulado en toda la cadena y lo que falta.
- *
- * `excluirRegistroId` sirve al editar: la jornada que se esta modificando no
- * debe contar como consumida, porque su valor se va a reemplazar.
+ * Cantidad total, ejecutado y pendiente de una obra.
+ * `excluirRegistroId`: al editar, no contar el registro que se esta cambiando.
  */
-export async function estadoDeObra(raizId: number, excluirRegistroId?: number) {
-  const raiz = await prisma.registroEjecucion.findUnique({
+export async function estadoDeObra(
+  raizId: number,
+  excluirRegistroId?: number,
+  cliente: Cliente = prisma,
+) {
+  const raiz = await cliente.registroEjecucion.findUnique({
     where: { id: raizId },
     select: {
       id: true,
@@ -293,30 +297,23 @@ export async function estadoDeObra(raizId: number, excluirRegistroId?: number) {
   }
 }
 
-/** Una fecha guardada (medianoche UTC) como texto aaaa-mm-dd. */
+/** Fecha guardada (medianoche UTC) -> aaaa-mm-dd. */
 const textoFecha = (valor: Date) => valor.toISOString().slice(0, 10)
 
 /**
- * Comprueba que la jornada sea coherente con el resto del modelo:
- *
- *   - la cuadrilla y el elemento tienen que ser del mismo proyecto, porque una
- *     cuadrilla se contrata para una obra concreta;
- *   - el trabajador tiene que haber estado asignado a esa cuadrilla el dia que
- *     se registra, que es justo para lo que existe el historial de
- *     asignaciones.
- *
- * Sin esto se podia guardar produccion de la Torre B a nombre de una cuadrilla
- * de otro proyecto, y los cortes por cuadrilla del panel quedaban sin sentido.
+ * Valida que la jornada sea coherente:
+ * - la cuadrilla es del mismo proyecto que el elemento
+ * - el trabajador estaba en esa cuadrilla en esa fecha
  */
 export async function validarCoherencia(datos: {
   elementoId: number
-  /** Nulo solo en una tarea que todavia no tiene cuadrilla asignada. */
+  /** Null solo en tareas sin cuadrilla asignada. */
   cuadrillaId: number | null
   trabajadorId: number | null
   fechaEjecucion: Date
 }) {
   if (datos.cuadrillaId === null) {
-    // Sin cuadrilla no hay nada que cruzar, pero el elemento tiene que existir.
+    // Sin cuadrilla solo se verifica que el elemento exista.
     const existe = await prisma.elementoConstructivo.findUnique({
       where: { id: datos.elementoId },
       select: { id: true },
@@ -379,9 +376,9 @@ export async function validarCoherencia(datos: {
 }
 
 /**
- * Comprueba que mover la fecha de un registro no desordene su cadena: la
- * apertura no puede quedar despues de su primer avance, y un avance no puede
- * quedar antes del registro que continua ni despues del que lo continua.
+ * Valida que el cambio de fecha no desordene la cadena:
+ * la apertura no puede quedar despues de su primer avance, ni un avance
+ * antes del anterior o despues del siguiente.
  */
 export async function validarFechaEnCadena(
   registro: { id: number; registroOrigenId: number | null; registroAnteriorId: number | null },
@@ -429,10 +426,7 @@ export async function validarFechaEnCadena(
   }
 }
 
-/**
- * Codigo de una tarea nueva: TA01, TA02... Sobre el maximo existente y no
- * contando filas, para que borrar una tarea no genere codigos repetidos.
- */
+/** Codigo de tarea nueva (TA01, TA02...), a partir del mayor existente. */
 export async function siguienteCodigoDeTarea() {
   const tareas = await prisma.tarea.findMany({ select: { codigo: true } })
   const numeros = tareas
@@ -442,7 +436,7 @@ export async function siguienteCodigoDeTarea() {
   return `TA${String(siguiente).padStart(2, '0')}`
 }
 
-/** Lo que hace falta de una tarea para pintarla en pantalla. */
+/** Relaciones de una tarea para mostrarla. */
 export const relacionesTarea = {
   elemento: ubicacionElemento,
   actividad: { select: { id: true, nombre: true, unidadMedida: true } },
@@ -456,7 +450,7 @@ export const relacionesTarea = {
     },
   },
   usuarioAsigna: { select: { id: true, nombre: true, apellido: true } },
-  /// La obra que nacio de la tarea, con sus avances, para saber como va.
+  /// Obra que nacio de la tarea, con sus avances.
   registro: {
     select: {
       id: true,
@@ -470,14 +464,9 @@ export const relacionesTarea = {
 } as const
 
 /**
- * Pone al dia el estado de una tarea segun lo que se haya ejecutado de su obra.
- *
- * El estado se guarda en vez de calcularse porque el residente tambien lo
- * mueve a mano (suspender una tarea, por ejemplo), pero lo obvio no deberia
- * tener que teclearlo: en cuanto hay una jornada, la tarea esta EN_PROCESO, y
- * cuando la obra llega al 100% queda TERMINADO.
- *
- * SUSPENDIDO no se toca: es una decision, no un estado derivado del avance.
+ * Actualiza el estado de una tarea segun su obra:
+ * sin jornadas = PENDIENTE, con jornadas = EN_PROCESO, al 100% = TERMINADO.
+ * SUSPENDIDO lo pone el residente y no se toca.
  */
 export async function sincronizarEstadoTarea(tareaId: number | null | undefined) {
   if (!tareaId) return
@@ -486,8 +475,7 @@ export async function sincronizarEstadoTarea(tareaId: number | null | undefined)
     where: { id: tareaId },
     select: {
       estado: true,
-      // El area por ejecutar es la del elemento, que es donde se mide.
-      elemento: { select: { largo: true, alto: true } },
+      elemento: { select: { largo: true, alto: true, areaVanos: true } },
       registro: {
         select: {
           largo: true,
@@ -501,12 +489,11 @@ export async function sincronizarEstadoTarea(tareaId: number | null | undefined)
   })
   if (!tarea || tarea.estado === 'SUSPENDIDO') return
 
-  // La cantidad es la que se copio en la obra, no la del elemento de hoy: si el
-  // muro se corrigio despues, la tarea y la obra tienen que seguir de acuerdo
-  // en si esta terminada.
+  // Se usa la cantidad copiada en la obra, no la del elemento actual.
   const total = tarea.registro
     ? cantidadDeObra(tarea.registro)
-    : Number(String(tarea.elemento.largo)) * Number(String(tarea.elemento.alto))
+    : Number(String(tarea.elemento.largo)) * Number(String(tarea.elemento.alto)) -
+      Number(String(tarea.elemento.areaVanos))
   const ejecutado = tarea.registro
     ? Number(String(tarea.registro.m2Ejecutados)) +
       sumarEjecutado(tarea.registro.avances)
@@ -524,10 +511,7 @@ export async function sincronizarEstadoTarea(tareaId: number | null | undefined)
   }
 }
 
-/**
- * La tarea de la obra a la que pertenece un registro. Solo la lleva el registro
- * que abre la obra, asi que un avance la busca en su origen.
- */
+/** Tarea de una obra (solo la lleva el registro que abre la obra). */
 export async function tareaDeLaObra(raizId: number) {
   const raiz = await prisma.registroEjecucion.findUnique({
     where: { id: raizId },
@@ -537,12 +521,8 @@ export async function tareaDeLaObra(raizId: number) {
 }
 
 /**
- * Comprueba que una obra pueda nacer de esa tarea.
- *
- * Dos reglas: una tarea da lugar a UNA obra, y el registro tiene que ser del
- * mismo elemento y de la misma actividad que la tarea. Lo demas (cuadrilla,
- * trabajador, medidas, meta) se hereda al abrir el formulario pero puede
- * diferir, porque lo que se encarga y lo que pasa en obra no siempre coinciden.
+ * Valida que una obra pueda nacer de la tarea:
+ * la tarea no tiene obra todavia y coinciden elemento y actividad.
  */
 export async function validarTareaParaObra(
   tareaId: number,
@@ -576,17 +556,9 @@ export async function validarTareaParaObra(
 }
 
 /**
- * Las medidas del elemento constructivo y la cantidad total de la obra que se
- * abre sobre el con esa actividad.
- *
- * El registro que abre la obra se queda con una copia, no con una referencia:
- * si manana se corrige el muro, los indicadores de lo que ya se midio no
- * cambian. Esta funcion es la que calcula esa copia.
- *
- * La cantidad depende de la unidad de la actividad (ver modoCantidad): m2 es
- * largo x alto, ml es el largo, y und, m3 o kg los escribe el residente,
- * porque las medidas del muro no dicen cuantos tomacorrientes lleva. Lo que
- * mande el navegador solo cuenta en ese ultimo caso.
+ * Medidas del elemento y cantidad total de la obra, segun la unidad:
+ * m2 = largo x alto, ml = largo; und, m3 y kg los escribe el residente.
+ * El registro de apertura guarda una copia de estos valores.
  */
 export async function cantidadParaObra(
   elementoId: number,
@@ -596,7 +568,7 @@ export async function cantidadParaObra(
   const [elemento, actividad] = await Promise.all([
     prisma.elementoConstructivo.findUnique({
       where: { id: elementoId },
-      select: { codigoDwg: true, descripcion: true, largo: true, alto: true },
+      select: { codigoDwg: true, descripcion: true, largo: true, alto: true, areaVanos: true },
     }),
     prisma.actividad.findUnique({
       where: { id: actividadId },
@@ -610,7 +582,8 @@ export async function cantidadParaObra(
   const alto = Number(String(elemento.alto))
   const unidad = normalizarUnidad(actividad.unidadMedida)
 
-  const deducida = cantidadDelElemento(unidad, largo, alto)
+  const areaVanos = Number(String(elemento.areaVanos))
+  const deducida = cantidadDelElemento(unidad, largo, alto, areaVanos)
   const cantidad = deducida ?? cantidadCapturada ?? null
 
   if (cantidad === null || !(cantidad > 0)) {
@@ -624,11 +597,8 @@ export async function cantidadParaObra(
 }
 
 /**
- * Una sola obra por elemento y actividad.
- *
- * Si se abrian dos, el area del muro se contaba dos veces en el panel: justo lo
- * que el modelo de registros encadenados existe para evitar. El segundo dia de
- * trabajo sobre ese muro no es una obra nueva sino un avance de la que ya hay.
+ * Solo puede haber una obra por elemento y actividad.
+ * El trabajo de otro dia sobre el mismo elemento es un avance, no una obra nueva.
  */
 export async function validarObraUnica(
   elementoId: number,
@@ -657,9 +627,8 @@ export async function validarObraUnica(
 }
 
 /**
- * Una sola tarea por elemento y actividad, y ninguna si ese trabajo ya tiene
- * obra abierta sin tarea: el encargo acabaria abriendo una segunda obra sobre
- * el mismo muro.
+ * Solo puede haber una tarea por elemento y actividad, y ninguna si ya hay
+ * una obra abierta sin tarea.
  */
 export async function validarTareaUnica(
   elementoId: number,
@@ -696,16 +665,8 @@ export async function validarTareaUnica(
 }
 
 /**
- * Un trabajador solo se asigna a una actividad cuando ya tiene precio acordado
- * para ella.
- *
- * Antes la jornada se guardaba igual, sin importe, y el problema aparecia al
- * liquidar: trabajo hecho que no se podia pagar. Ahora se frena al asignar la
- * tarea o al registrar la jornada, que es cuando todavia se puede arreglar:
- * se acuerda el precio en la ficha del trabajador y se vuelve a guardar.
- *
- * Responde con el codigo SIN_PRECIO para que la pantalla lo muestre en una
- * ventana de error y no como un aviso mas.
+ * Exige que el trabajador tenga precio acordado para la actividad.
+ * Responde con el codigo SIN_PRECIO para que la pantalla muestre la ventana de error.
  */
 export async function exigirPrecioAcordado(
   trabajadorId: number | null | undefined,

@@ -9,7 +9,7 @@ import { useRecurso } from '@/lib/cliente'
 import { formatoMoneda } from '@/lib/utils'
 import type { Actividad, Cargo, Trabajador } from '@/types/dominio'
 
-/** Una fila de la seccion de precios, todavia como texto del formulario. */
+/** Fila de precio en el formulario (como texto). */
 type FilaTarifa = { actividadId: string; valorM2: string }
 
 export function FormTrabajador({
@@ -23,7 +23,7 @@ export function FormTrabajador({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const { datos: cargos } = useRecurso<Cargo>(abierto ? '/api/cargos' : null)
   const { datos: actividades } = useRecurso<Actividad>(abierto ? '/api/actividades' : null)
   const [form, setForm] = useState({
@@ -34,11 +34,7 @@ export function FormTrabajador({
     activo: true,
   })
 
-  /**
-   * Los precios por metro de este trabajador, una fila por actividad. Van en su
-   * propio estado y no dentro de `form` porque son una lista que crece y se
-   * recorta con los botones de la seccion.
-   */
+  /** Precios del trabajador, una fila por actividad. */
   const [tarifas, setTarifas] = useState<FilaTarifa[]>([])
 
   useEffect(() => {
@@ -62,8 +58,7 @@ export function FormTrabajador({
     )
   }, [abierto, registro])
 
-  // Mas filas que actividades registradas no tiene sentido: cada actividad
-  // lleva un solo precio, asi que el boton se agota cuando ya estan todas.
+  // No puede haber mas filas que actividades.
   const puedeAgregar = actividades.length > 0 && tarifas.length < actividades.length
 
   const agregarTarifa = () =>
@@ -75,11 +70,7 @@ export function FormTrabajador({
   const cambiarTarifa = (indice: number, campos: Partial<FilaTarifa>) =>
     setTarifas((lista) => lista.map((f, i) => (i === indice ? { ...f, ...campos } : f)))
 
-  /**
-   * Las actividades que puede ofrecer una fila: las que no estan ya elegidas en
-   * otra, mas la suya propia. Asi no se puede acordar dos precios distintos
-   * para el mismo trabajo.
-   */
+  /** Actividades disponibles para una fila: las no elegidas en otras, mas la suya. */
   const actividadesPara = (indice: number) => {
     const tomadas = new Set(
       tarifas.filter((_, i) => i !== indice).map((t) => Number(t.actividadId)),
@@ -90,8 +81,7 @@ export function FormTrabajador({
   const unidadDe = (actividadId: string) =>
     actividades.find((a) => a.id === Number(actividadId))?.unidadMedida || 'm2'
 
-  // Los errores de la lista llegan como 'tarifas.0.valorM2': se muestran juntos
-  // encima de la seccion en vez de intentar colgarlos de cada input.
+  // Los errores de la lista (tarifas.0.valorM2...) se muestran juntos.
   const errorTarifas = Object.entries(errores).find(([campo]) =>
     campo.startsWith('tarifas'),
   )?.[1]
@@ -101,8 +91,7 @@ export function FormTrabajador({
     guardar(
       registro ? `/api/trabajadores/${registro.id}` : '/api/trabajadores',
       registro ? 'PUT' : 'POST',
-      // Las filas a medio llenar no se mandan: una fila sin actividad no es un
-      // precio, es un descuido.
+      // No se envian filas sin actividad.
       { ...form, tarifas: tarifas.filter((t) => t.actividadId && t.valorM2 !== '') },
       onGuardado,
     )
@@ -159,7 +148,7 @@ export function FormTrabajador({
           </Campo>
         </div>
 
-        {/* --- Precios por actividad ------------------------------------- */}
+        {/* Precios por actividad */}
         <div className="rounded-lg border border-obra-200 p-3">
           <div className="mb-1 flex items-center justify-between gap-3">
             <div>
@@ -188,14 +177,14 @@ export function FormTrabajador({
 
           {tarifas.length === 0 ? (
             <p className="mt-2 text-xs text-obra-400">
-              Sin precios acordados. Las jornadas de este trabajador se guardaran sin importe
-              hasta que se agregue al menos uno.
+              Sin precios acordados: no se le pueden asignar tareas ni jornadas hasta agregar
+              al menos uno.
             </p>
           ) : (
             <ul className="mt-2 space-y-2">
               {tarifas.map((fila, indice) => (
-                <li key={indice} className="flex items-end gap-2">
-                  <div className="min-w-0 flex-1">
+                <li key={indice} className="flex flex-wrap items-end gap-2 sm:flex-nowrap">
+                  <div className="min-w-0 basis-full sm:basis-auto sm:flex-1">
                     <Seleccion
                       value={fila.actividadId}
                       onChange={(e) => cambiarTarifa(indice, { actividadId: e.target.value })}
@@ -211,7 +200,7 @@ export function FormTrabajador({
                     </Seleccion>
                   </div>
 
-                  <div className="relative w-36 shrink-0">
+                  <div className="relative min-w-0 flex-1 sm:w-36 sm:flex-none">
                     <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-obra-400">
                       $
                     </span>

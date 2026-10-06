@@ -1,19 +1,16 @@
 import { prisma } from '@/lib/prisma'
-import { ok, manejarError, exigirSesion } from '@/lib/api'
+import { ok, manejarError, exigirSesion, sinPrecios } from '@/lib/api'
 import { filtroRegistros, ultimoDeCadena } from '@/lib/consultas'
 import { indicadoresObra } from '@/lib/calculos'
 
 /**
- * Las obras abiertas, es decir las cadenas de registros. Cada una viene con el
- * registro que la abrio, todos sus avances y el ultimo de la cadena, que es al
- * que hay que encadenar el siguiente avance.
- *
- * Con abiertas=1 devuelve solo las que no han llegado al 100%, que es lo que
- * necesita el formulario de "nuevo registro de avance".
+ * Obras (cadenas de registros) con sus avances y el ultimo registro,
+ * que es al que se encadena el siguiente avance.
+ * Con abiertas=1 solo devuelve las que no han llegado al 100%.
  */
 export async function GET(request: Request) {
   try {
-    await exigirSesion()
+    const sesion = await exigirSesion()
     const parametros = new URL(request.url).searchParams
     parametros.set('soloAperturas', '1')
 
@@ -73,13 +70,10 @@ export async function GET(request: Request) {
 
     const obras = raices
       .map((raiz) => {
-        // La aritmetica de la obra sale de lib/calculos, la misma que usan el
-        // panel y la pantalla de ejecucion. Estaba repetida aqui y repetir una
-        // formula es la manera segura de que dos pantallas acaben dando cifras
-        // distintas para la misma obra.
+        // Los numeros de la obra salen de lib/calculos, igual que en el resto de la app.
         const ind = indicadoresObra(raiz)
 
-        // El ultimo eslabon es el unico que todavia no tiene continuacion.
+        // Ultimo registro de la cadena.
         const ultimo = ultimoDeCadena(raiz, raiz.avances)
 
         return {
@@ -100,7 +94,7 @@ export async function GET(request: Request) {
       })
       .filter((o) => !soloAbiertas || !o.resumen.completada)
 
-    return ok(obras)
+    return ok(sinPrecios(obras, sesion.user.rol))
   } catch (error) {
     return manejarError(error)
   }

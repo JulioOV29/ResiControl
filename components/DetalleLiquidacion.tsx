@@ -7,10 +7,10 @@ import { Boton } from '@/components/ui/button'
 import { borrar, useRecursoUnico } from '@/lib/cliente'
 import { usePuede } from '@/lib/permisos'
 import { ETIQUETA_PERIODO } from '@/lib/dominio'
-import { formatoFecha, formatoMoneda, formatoNumero } from '@/lib/utils'
+import { formatoFecha, formatoMoneda, formatoNumero, formatoMomento } from '@/lib/utils'
 import type { Liquidacion } from '@/types/dominio'
 
-/** Un dato con su etiqueta encima. */
+/** Dato con su etiqueta. */
 function Dato({ etiqueta, children }: { etiqueta: string; children: React.ReactNode }) {
   return (
     <div>
@@ -20,20 +20,20 @@ function Dato({ etiqueta, children }: { etiqueta: string; children: React.ReactN
   )
 }
 
-/** La cuenta en una linea: "Bancolombia · Ahorros · 1234 5678". */
+/** Cuenta en una linea: "Bancolombia · Ahorros · 1234 5678". */
 export function textoCuenta(l: Pick<Liquidacion, 'banco' | 'tipoCuenta' | 'numeroCuenta'>) {
   const tipo = l.tipoCuenta ? l.tipoCuenta.charAt(0) + l.tipoCuenta.slice(1).toLowerCase() : null
   return [l.banco, tipo, l.numeroCuenta].filter(Boolean).join(' · ')
 }
 
-/** El lapso en palabras: "Quincena · 16/09/2026 a 30/09/2026". */
-export function textoPeriodo(l: Pick<Liquidacion, 'tipoPeriodo' | 'desde' | 'hasta'>) {
+/** Periodo en texto: "Quincena · 16/09/2026 a 30/09/2026". */
+function textoPeriodo(l: Pick<Liquidacion, 'tipoPeriodo' | 'desde' | 'hasta'>) {
   return `${ETIQUETA_PERIODO[l.tipoPeriodo]} · ${formatoFecha(l.desde)} a ${formatoFecha(l.hasta)}`
 }
 
 /**
- * El comprobante de una liquidacion: a quien, por que lapso, quien la hizo, a
- * que cuenta, y el detalle de lo pagado por actividad y por jornada.
+ * Comprobante de una liquidacion: trabajador, periodo, responsable, cuenta
+ * y detalle por actividad y por jornada.
  */
 export function DetalleLiquidacion({
   liquidacionId,
@@ -107,7 +107,7 @@ export function DetalleLiquidacion({
             <Dato etiqueta="Responsable de la liquidacion">
               {l.usuarioLiquida.nombre} {l.usuarioLiquida.apellido}
               <span className="block text-xs text-obra-500">
-                {l.usuarioLiquida.email} · {formatoFecha(l.createdAt)}
+                {l.usuarioLiquida.email} · {formatoMomento(l.createdAt)}
               </span>
             </Dato>
             <Dato etiqueta="Periodo">{textoPeriodo(l)}</Dato>

@@ -18,7 +18,7 @@ export function FormActividad({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const [form, setForm] = useState({
     nombre: '',
     unidadMedida: 'm2',
@@ -40,8 +40,7 @@ export function FormActividad({
     )
   }, [abierto, registro])
 
-  // Una unidad guardada que ya no este en la lista se sigue ofreciendo, para
-  // que editar el nombre de una actividad vieja no se la cambie por detras.
+  // Si la unidad guardada ya no esta en la lista, se sigue ofreciendo.
   const unidadFueraDeLista =
     Boolean(form.unidadMedida) && !UNIDADES_MEDIDA.some((u) => u.valor === form.unidadMedida)
 
@@ -85,18 +84,13 @@ export function FormActividad({
                 </option>
               ))}
 
-              {/*
-                Una actividad vieja puede tener una unidad que ya no esta en la
-                lista. Se ofrece igual, para que editar su nombre no le cambie
-                la unidad por detras.
-              */}
+              {/* Unidad antigua que ya no esta en la lista */}
               {unidadFueraDeLista && (
                 <option value={form.unidadMedida}>{form.unidadMedida} (actual)</option>
               )}
             </Seleccion>
           </Campo>
         </div>
-
 
         <Campo etiqueta="Descripcion" error={errores.descripcion}>
           <Entrada
@@ -105,10 +99,7 @@ export function FormActividad({
           />
         </Campo>
 
-        {/*
-          El precio ya no vive aqui: lo que se paga por metro depende de quien
-          ejecuta, asi que se captura en la ficha de cada trabajador.
-        */}
+        {/* El precio se define en la ficha de cada trabajador */}
         <p className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2 text-xs text-obra-500">
           El precio por {form.unidadMedida || 'unidad'} se acuerda con cada trabajador y se
           captura en su ficha, en la seccion Trabajadores.

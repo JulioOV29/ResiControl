@@ -8,18 +8,11 @@ export type Respuesta<T> =
   | { ok: true; datos: T }
   | { ok: false; error: string; campos?: ErrorCampo[]; codigo?: string }
 
-/**
- * Envoltura unica de fetch: traduce cualquier respuesta de la API a un
- * resultado con forma fija, para que ninguna pantalla tenga que repetir el
- * manejo de errores ni adivinar la forma del cuerpo.
- */
+/** fetch con respuesta de forma fija: { ok, datos } o { ok: false, error }. */
 export async function pedir<T>(url: string, opciones?: RequestInit): Promise<Respuesta<T>> {
   try {
     const respuesta = await fetch(url, {
-      // Nada de esto se sirve desde la cache del navegador. Son datos vivos y
-      // con sesion: una lista de actividades o de registros guardada de hace un
-      // rato se ve exactamente igual que una al dia, y ahi no hay como darse
-      // cuenta de que lo que se esta leyendo es viejo.
+      // Sin cache: siempre datos actuales.
       cache: 'no-store',
       ...opciones,
       headers: {
@@ -54,11 +47,7 @@ export function borrar(url: string) {
   return pedir<{ mensaje: string }>(url, { method: 'DELETE' })
 }
 
-/**
- * Lista de un recurso con su estado de carga. Si la url es null no consulta
- * nada, lo que sirve para listas que dependen de una seleccion previa (los
- * pisos de una torre, las zonas de un piso).
- */
+/** Lista de un recurso con su estado de carga. Con url null no consulta. */
 export function useRecurso<T>(url: string | null) {
   const [datos, setDatos] = useState<T[]>([])
   const [cargando, setCargando] = useState(Boolean(url))
@@ -90,12 +79,8 @@ export function useRecurso<T>(url: string | null) {
 }
 
 /**
- * Retrasa un valor hasta que deja de cambiar durante unos milisegundos.
- *
- * Los filtros de fecha son la razon: un <input type="date"> dispara onChange en
- * cada parte que se escribe, asi que teclear "2026-09-15" lanzaba varias
- * consultas del panel seguidas, cada una recalculando todos los indicadores
- * contra la base, y solo servia la ultima. Con esto se lanza una.
+ * Devuelve el valor solo cuando deja de cambiar por unos ms.
+ * Evita consultar en cada tecla (por ejemplo, en filtros de fecha).
  */
 export function useRetardo<T>(valor: T, milisegundos = 350): T {
   const [retrasado, setRetrasado] = useState(valor)
@@ -108,14 +93,7 @@ export function useRetardo<T>(valor: T, milisegundos = 350): T {
   return retrasado
 }
 
-/**
- * Vuelve a pedir los datos cuando la pestana recupera el foco.
- *
- * Las pantallas piden sus catalogos al montarse y ahi se quedan. Si se da de
- * alta una actividad en otra pestana, el panel sigue ensenando la lista con la
- * que nacio hasta que se recargue a mano. Esto lo resuelve en el momento en que
- * el usuario vuelve, que es justo cuando va a mirar.
- */
+/** Recarga los datos al volver a la pestana. */
 export function useRefrescoAlVolver(recargar: () => void) {
   useEffect(() => {
     const alVolver = () => {
@@ -130,17 +108,14 @@ export function useRefrescoAlVolver(recargar: () => void) {
   }, [recargar])
 }
 
-/** Convierte la lista de errores por campo en un objeto para el formulario. */
+/** Errores por campo -> objeto { campo: mensaje }. */
 export function mapaDeErrores(campos?: ErrorCampo[]) {
   const mapa: Record<string, string> = {}
   for (const c of campos || []) mapa[c.campo] = c.mensaje
   return mapa
 }
 
-/**
- * Flujo de borrado con confirmacion, compartido por todas las pantallas: pedir,
- * confirmar, mostrar el motivo cuando el servidor lo rechaza por integridad.
- */
+/** Borrado con confirmacion, usado por todas las pantallas. */
 export function useEliminacion(baseUrl: string, alTerminar: () => void) {
   const [objetivo, setObjetivo] = useState<{ id: number; etiqueta: string } | null>(null)
   const [procesando, setProcesando] = useState(false)
@@ -173,10 +148,7 @@ export function useEliminacion(baseUrl: string, alTerminar: () => void) {
   return { objetivo, procesando, error, pedir, cancelar, confirmar }
 }
 
-/**
- * Igual que useRecurso pero para una sola respuesta: el detalle de un registro,
- * el panel, o una lista que viene acompañada de su resumen.
- */
+/** Como useRecurso, pero para una sola respuesta (un detalle, el panel...). */
 export function useRecursoUnico<T>(url: string | null) {
   const [dato, setDato] = useState<T | null>(null)
   const [cargando, setCargando] = useState(Boolean(url))
@@ -205,18 +177,14 @@ export function useRecursoUnico<T>(url: string | null) {
 
   const cargar = useCallback(() => traer(false), [traer])
 
-  /**
-   * Recarga sin encender el indicador de carga ni vaciar lo que ya se ve. Sirve
-   * para refrescar despues de guardar: la fila nueva ya esta puesta en
-   * pantalla, y esto solo pone al dia las cifras que dependen del resto.
-   */
+  /** Recarga sin mostrar el indicador de carga. */
   const recargarEnSilencio = useCallback(() => traer(true), [traer])
 
   useEffect(() => {
     cargar()
   }, [cargar])
 
-  /** Cambia lo que se ve sin ir al servidor, para reflejar algo al instante. */
+  /** Cambia los datos en pantalla sin ir al servidor. */
   const actualizar = useCallback((cambio: (previo: T) => T) => {
     setDato((previo) => (previo === null ? previo : cambio(previo)))
   }, [])

@@ -3,12 +3,8 @@
  *
  *   npm run restaurar respaldos/respaldo-2026-09-24-0930.json
  *
- * Inserta las filas con sus identificadores originales, en el orden en que se
- * pueden insertar sin romper las llaves foraneas, y salta las que ya existan.
- * Al final pone los contadores de id donde toca, para que lo siguiente que se
- * cree no choque con lo restaurado.
- *
- * No borra nada: si quieres una base limpia, vaciala antes.
+ * Inserta las filas con sus ids originales, salta las que ya existen y ajusta
+ * los contadores de id. No borra nada.
  */
 require('dotenv').config()
 
@@ -17,7 +13,7 @@ const { PrismaClient } = require('@prisma/client')
 
 const prisma = new PrismaClient()
 
-// Cada tabla con la tabla real y su columna de id, para recolocar la secuencia.
+// Modelo, tabla y columna de id (para ajustar la secuencia).
 const TABLAS = [
   ['usuario', 'usuarios', 'id_usuario'],
   ['proyecto', 'proyectos', 'id_proyecto'],
@@ -25,6 +21,7 @@ const TABLAS = [
   ['piso', 'pisos', 'id_piso'],
   ['zona', 'zonas', 'id_zona'],
   ['elementoConstructivo', 'elementos_constructivos', 'id_elemento'],
+  ['vano', 'vanos', 'id_vano'],
   ['actividad', 'actividades', 'id_actividad'],
   ['cargo', 'cargos', 'id_cargo'],
   ['trabajador', 'trabajadores', 'id_trabajador'],
@@ -52,9 +49,7 @@ async function main() {
   const contenido = JSON.parse(fs.readFileSync(ruta, 'utf8'))
   console.log(`Respaldo del ${contenido.generado}\n`)
 
-  // Los respaldos anteriores a la columna cantidad_total no la traen, y la base
-  // exige que toda obra la tenga. Se completa con la misma regla que usa
-  // db:constraints para las obras viejas: ml = largo, lo demas largo x alto.
+  // Respaldos viejos sin cantidad_total: se completa (ml = largo, lo demas largo x alto).
   const unidadDe = new Map(
     (contenido.tablas?.actividad ?? []).map((a) => [a.id, a.unidadMedida]),
   )
@@ -66,37 +61,39 @@ async function main() {
       unidadDe.get(r.actividadId) === 'ml' ? largo : Math.round(largo * alto * 100) / 100
   }
 
-  for (const [modelo, tabla, columnaId] of TABLAS) {
-    const filas = contenido.tablas?.[modelo] ?? []
-    if (filas.length === 0) {
-      console.log(`${modelo.padEnd(22)} sin filas`)
-      continue
-    }
+  // Todo o nada: si una tabla falla, no queda la base a medio restaurar.
+  await prisma.$transaction(
+    async (tx) => {
+      for (const [modelo, tabla, columnaId] of TABLAS) {
+        const filas = contenido.tablas?.[modelo] ?? []
+        if (filas.length === 0) {
+          console.log(`${modelo.padEnd(22)} sin filas`)
+          continue
+        }
 
-    /**
-     * Los registros de obra se encadenan entre si, asi que primero entran los
-     * que abren obra y despues sus avances: un avance no puede apuntar a un
-     * registro que todavia no existe.
-     */
-    const tandas =
-      modelo === 'registroEjecucion'
-        ? [filas.filter((f) => f.registroOrigenId === null), filas.filter((f) => f.registroOrigenId !== null)]
-        : [filas]
+        /** Primero las aperturas y despues los avances (un avance apunta a otro registro). */
+        const tandas =
+          modelo === 'registroEjecucion'
+            ? [filas.filter((f) => f.registroOrigenId === null), filas.filter((f) => f.registroOrigenId !== null)]
+            : [filas]
 
-    let insertadas = 0
-    for (const tanda of tandas) {
-      if (tanda.length === 0) continue
-      const r = await prisma[modelo].createMany({ data: tanda, skipDuplicates: true })
-      insertadas += r.count
-    }
+        let insertadas = 0
+        for (const tanda of tandas) {
+          if (tanda.length === 0) continue
+          const r = await tx[modelo].createMany({ data: tanda, skipDuplicates: true })
+          insertadas += r.count
+        }
 
-    // El contador de id queda donde termino lo restaurado.
-    await prisma.$executeRawUnsafe(
-      `SELECT setval(pg_get_serial_sequence('${tabla}', '${columnaId}'), COALESCE((SELECT MAX(${columnaId}) FROM ${tabla}), 1))`,
-    )
+        // Ajusta el contador de id.
+        await tx.$executeRawUnsafe(
+          `SELECT setval(pg_get_serial_sequence('${tabla}', '${columnaId}'), COALESCE((SELECT MAX(${columnaId}) FROM ${tabla}), 1))`,
+        )
 
-    console.log(`${modelo.padEnd(22)} ${insertadas} de ${filas.length} insertadas`)
-  }
+        console.log(`${modelo.padEnd(22)} ${insertadas} de ${filas.length} insertadas`)
+      }
+    },
+    { timeout: 10 * 60 * 1000, maxWait: 30 * 1000 },
+  )
 
   console.log('\nRestauracion terminada.')
 }

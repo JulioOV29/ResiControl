@@ -17,7 +17,7 @@ import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib
 import { conProyecto } from '@/lib/etiquetas'
 import type { Cuadrilla, Meta, Obra, Registro } from '@/types/dominio'
 
-/** Si el trabajador tiene precio acordado para esa actividad. */
+/** true si el trabajador tiene precio para esa actividad. */
 function tienePrecio(
   trabajador: { tarifas?: Array<{ actividadId: number }> } | undefined | null,
   actividadId: string | number | null | undefined,
@@ -26,19 +26,13 @@ function tienePrecio(
   return (trabajador?.tarifas ?? []).some((t) => t.actividadId === Number(actividadId))
 }
 
-// La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
+// Fecha local, no UTC (ver hoyTexto).
 const hoy = hoyTexto
 
-/** El dia siguiente a una fecha en formato aaaa-mm-dd. */
-const diaSiguiente = (fecha: string) => {
-  const d = new Date(`${fecha}T00:00:00.000Z`)
-  d.setUTCDate(d.getUTCDate() + 1)
-  return d.toISOString().slice(0, 10)
-}
-
+// La fecha se pone al abrir el formulario (no al cargar la pagina).
 const vacio = {
   obraId: '',
-  fechaEjecucion: hoy(),
+  fechaEjecucion: '',
   cuadrillaId: '',
   trabajadorId: '',
   m2Ejecutados: '',
@@ -50,8 +44,8 @@ const vacio = {
 }
 
 /**
- * Continua una obra ya abierta. No pide ubicacion ni medidas: las hereda del
- * registro que abrio la obra, y se encadena al ultimo registro de esa obra.
+ * Avance de una obra abierta: hereda ubicacion y medidas, y se encadena
+ * al ultimo registro de la obra.
  */
 export function FormRegistroAvance({
   abierto,
@@ -61,9 +55,9 @@ export function FormRegistroAvance({
   onGuardado,
 }: {
   abierto: boolean
-  /** Solo al editar un avance ya guardado. */
+  /** Solo al editar. */
   registro: Registro | null
-  /** Id del registro que abrio la obra, cuando se entra desde una obra concreta. */
+  /** Obra elegida de antemano (opcional). */
   obraPreseleccionada?: number | null
   onCerrar: () => void
   onGuardado: (creado: Registro) => void
@@ -76,22 +70,19 @@ export function FormRegistroAvance({
     ventanaError,
     mostrarVentanaError,
     cerrarVentanaError,
-  } = useEnvio()
+  } = useEnvio(abierto)
   const [form, setForm] = useState(vacio)
   const [metaTocada, setMetaTocada] = useState(false)
 
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
 
-  // Al editar hace falta la obra completa aunque ya este terminada.
+  // Al editar se necesita la obra aunque este terminada.
   const obras = useRecurso<Obra>(
     abierto ? (registro ? '/api/obras' : '/api/obras?abiertas=1') : null,
   )
   const obra = obras.datos.find((o) => String(o.id) === form.obraId) ?? null
 
-  /**
-   * La unidad la hereda la obra, igual que la actividad: si la obra se abrio
-   * midiendo metros lineales, el avance se pide en metros lineales.
-   */
+  /** La unidad es la de la actividad de la obra. */
   const unidad = obra?.actividad?.unidadMedida ?? 'm2'
 
   const cuadrillas = useRecurso<Cuadrilla>(
@@ -104,21 +95,19 @@ export function FormRegistroAvance({
   const trabajadorElegido = integrantes.find((i) => String(i.trabajadorId) === form.trabajadorId)
   const cargoId = trabajadorElegido?.trabajador?.cargo.id ?? null
 
-  /**
-   * La actividad la hereda la obra, asi que el precio de esta jornada es el que
-   * tiene el trabajador elegido para la actividad de la obra. Sin precio la
-   * jornada se guarda igual, pero sin importe, y se avisa antes de guardar.
-   */
+  /** Precio del trabajador para la actividad de la obra. */
   const tarifaJornada = obra
     ? (trabajadorElegido?.trabajador?.tarifas ?? []).find(
         (t) => t.actividadId === obra.actividadId,
       )
     : undefined
-  const faltaTarifa = Boolean(obra && form.trabajadorId && !tarifaJornada)
+  // Solo con el trabajador ya cargado: mientras carga la cuadrilla no se sabe.
+  const faltaTarifa = Boolean(obra && trabajadorElegido && !tarifaJornada)
 
   useEffect(() => {
     if (!abierto) return
-    setMetaTocada(false)
+    // Al editar se respeta la meta que ya tenia la jornada.
+    setMetaTocada(Boolean(registro))
 
     if (registro) {
       setForm({
@@ -136,20 +125,21 @@ export function FormRegistroAvance({
       return
     }
 
-    setForm({ ...vacio, obraId: obraPreseleccionada ? String(obraPreseleccionada) : '' })
+    setForm({
+      ...vacio,
+      fechaEjecucion: hoy(),
+      obraId: obraPreseleccionada ? String(obraPreseleccionada) : '',
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [abierto, registro, obraPreseleccionada])
 
-  // Al elegir la obra se hereda la cuadrilla del ultimo dia, que casi siempre
-  // sigue siendo la misma, y la fecha se propone como el dia siguiente al
-  // ultimo trabajado: proponer "hoy" fallaba en cuanto la obra venia de una
-  // fecha posterior, que es lo normal con datos cargados por adelantado.
+  // Al elegir la obra se proponen la cuadrilla del ultimo dia y la fecha de hoy.
   useEffect(() => {
     if (!obra || registro) return
-    const propuesta = ultimaFecha ? diaSiguiente(ultimaFecha) : hoy()
     cambiar({
       cuadrillaId: String(obra.cuadrillaId),
       trabajadorId: obra.trabajadorId ? String(obra.trabajadorId) : '',
-      fechaEjecucion: propuesta > hoy() ? propuesta : hoy(),
+      fechaEjecucion: hoy(),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [obra?.id])
@@ -165,24 +155,41 @@ export function FormRegistroAvance({
     })
 
     let cancelado = false
+    // Mientras el usuario no escriba la meta, sigue a la meta vigente.
     pedir<Meta | null>(`/api/metas/vigente?${parametros}`).then((r) => {
-      if (cancelado || !r.ok || !r.datos?.m2Objetivo) return
-      setForm((f) => (f.m2Meta ? f : { ...f, m2Meta: String(r.datos!.m2Objetivo) }))
+      if (cancelado || !r.ok) return
+      const propuesta = r.datos?.m2Objetivo ? String(r.datos.m2Objetivo) : ''
+      setForm((f) => (f.m2Meta === propuesta ? f : { ...f, m2Meta: propuesta }))
     })
     return () => {
       cancelado = true
     }
   }, [abierto, metaTocada, obra, form.fechaEjecucion, cargoId])
 
-  /** Fecha del ultimo dia trabajado en la obra. El avance no puede ser antes. */
-  const ultimaFecha = obra
-    ? (obra.avances.length
+  /**
+   * Fechas permitidas: despues del registro anterior y antes del siguiente.
+   * Uno nuevo va despues del ultimo de la cadena; nunca despues de hoy.
+   */
+  const limitesFecha = useMemo(() => {
+    if (!obra) return { min: undefined, max: hoy() }
+    const fechaDe = (id: number | null | undefined) =>
+      id === obra.id
+        ? obra.fechaEjecucion.slice(0, 10)
+        : obra.avances.find((a) => a.id === id)?.fechaEjecucion.slice(0, 10)
+    if (!registro) {
+      const ultimo = obra.avances.length
         ? obra.avances[obra.avances.length - 1].fechaEjecucion
         : obra.fechaEjecucion
-      ).slice(0, 10)
-    : null
+      return { min: ultimo.slice(0, 10), max: hoy() }
+    }
+    const siguiente = obra.avances.find((a) => a.registroAnteriorId === registro.id)
+    return {
+      min: fechaDe(registro.registroAnteriorId),
+      max: siguiente ? siguiente.fechaEjecucion.slice(0, 10) : hoy(),
+    }
+  }, [obra, registro])
 
-  /** Lo que lleva la obra sin contar el registro que se esta editando. */
+  /** Lo que lleva la obra sin contar el registro que se edita. */
   const saldo = useMemo(() => {
     if (!obra) return null
     const propio = registro ? registro.m2Ejecutados : 0
@@ -200,8 +207,7 @@ export function FormRegistroAvance({
 
     const jornada = indicadoresJornada({
       m2Ejecutados: form.m2Ejecutados || 0,
-      // Vacio significa "sin meta", no "meta cero": una jornada sin meta se
-      // queda fuera del cumplimiento en vez de contar como incumplida.
+      // Vacio = sin meta (no cuenta para el cumplimiento).
       m2Meta: form.m2Meta,
       horaInicio: horaADate(form.horaInicio),
       horaFinal: horaADate(form.horaFinal),
@@ -227,8 +233,13 @@ export function FormRegistroAvance({
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
-    // Sin precio acordado para la actividad de la obra no se guarda. Al editar
-    // solo se exige si cambia el trabajador, igual que en el servidor.
+    if (excedido && saldo) {
+      mostrarVentanaError(
+        `A la obra solo le quedan ${formatoNumero(saldo.pendiente)} ${unidad} por ejecutar.`,
+      )
+      return
+    }
+    // Sin precio no se guarda (al editar, solo si cambia el trabajador).
     const cambiaTrabajador = !registro || form.trabajadorId !== String(registro.trabajadorId ?? '')
     if (cambiaTrabajador && faltaTarifa) {
       mostrarVentanaError(
@@ -247,7 +258,7 @@ export function FormRegistroAvance({
       return
     }
 
-    // El avance se encadena al ultimo registro de la obra, no a la raiz.
+    // Se encadena al ultimo registro de la obra.
     guardar(
       '/api/registros',
       'POST',
@@ -265,7 +276,7 @@ export function FormRegistroAvance({
       titulo={registro ? `Editar avance ${registro.codigoRegistro}` : 'Nuevo registro de avance'}
       descripcion="Continua una obra ya abierta. La ubicacion y las medidas se heredan."
       abierto={abierto}
-      // Con la ventana de error abierta, Escape cierra solo esa ventana.
+      // Con la ventana de error abierta, Escape solo la cierra a ella.
       onCerrar={ventanaError ? cerrarVentanaError : onCerrar}
       ancho="xl"
     >
@@ -360,7 +371,8 @@ export function FormRegistroAvance({
               <Entrada
                 type="date"
                 value={form.fechaEjecucion}
-                min={ultimaFecha ?? undefined}
+                min={limitesFecha.min}
+                max={limitesFecha.max}
                 onChange={(e) => cambiar({ fechaEjecucion: e.target.value })}
                 required
               />
@@ -380,16 +392,16 @@ export function FormRegistroAvance({
                 ))}
               </Seleccion>
             </Campo>
-            <Campo etiqueta="Trabajador" error={errores.trabajadorId}>
+            <Campo etiqueta="Trabajador" error={errores.trabajadorId} requerido>
               <Seleccion
                 value={form.trabajadorId}
                 onChange={(e) => cambiar({ trabajadorId: e.target.value })}
                 disabled={!form.cuadrillaId}
+                required
               >
-                <option value="">Sin asignar</option>
+                <option value="">Elige quien hizo la jornada</option>
                 {integrantes.map((i) => {
-                  // Sin precio acordado para esta actividad no se puede elegir:
-                  // primero se acuerda en su ficha.
+                  // Sin precio para la actividad no se puede elegir.
                   const sinPrecio = Boolean(obra?.actividad?.id) && !tienePrecio(i.trabajador, obra?.actividad?.id)
                   return (
                     <option
@@ -523,7 +535,7 @@ export function FormRegistroAvance({
                   <div
                     className={
                       vista.obra.completa
-                        ? 'h-full rounded-full bg-emerald-500'
+                        ? 'h-full rounded-full bg-menta-400'
                         : 'h-full rounded-full bg-acento-500'
                     }
                     style={{ width: `${Math.min(100, vista.obra.avance * 100)}%` }}

@@ -1,25 +1,16 @@
 /**
- * Motor de indicadores del sistema.
+ * Calculo de indicadores. Nada de esto se guarda en la base.
  *
- * Ningun indicador se almacena en la base: todos se derivan aqui, para que
- * exista una sola definicion de cada formula y el panel, la pantalla de
- * ejecucion y los informes no puedan discrepar entre si.
+ * Tres niveles:
+ *   JORNADA  un registro (un dia de trabajo)
+ *   OBRA     la cadena de registros de un mismo trabajo, hasta el 100%
+ *   GLOBAL   varias jornadas de varias obras
  *
- * Hay tres niveles, y confundirlos es la fuente de casi todos los errores:
- *
- *   JORNADA  un registro: lo producido y el tiempo de un dia concreto
- *   OBRA     la cadena de registros de un mismo trabajo, que avanza hasta 100%
- *   GLOBAL   un conjunto de jornadas de varias obras
- *
- * Regla de agregacion: un indicador global NUNCA se obtiene promediando ni
- * sumando indicadores individuales, siempre es SUM(numerador)/SUM(denominador).
- *
- * Regla de la cantidad total: las dimensiones las lleva el registro que abre la
- * obra. Al agregar, el area de cada obra se cuenta UNA sola vez aunque el
- * trabajo se haya repartido en diez dias.
+ * Un indicador global siempre es SUM(numerador) / SUM(denominador), nunca un
+ * promedio de indicadores. El area de cada obra se cuenta una sola vez.
  */
 
-/** Numero, Decimal de Prisma, texto o nulo -> numero plano. */
+/** Decimal de Prisma, texto o nulo -> number. */
 export function num(valor: unknown): number {
   if (valor === null || valor === undefined) return 0
   if (typeof valor === 'number') return valor
@@ -27,19 +18,15 @@ export function num(valor: unknown): number {
   return Number.isNaN(n) ? 0 : n
 }
 
-/** Division segura: devuelve null cuando el denominador no aporta informacion. */
-export function dividir(numerador: number, denominador: number): number | null {
+/** Division que devuelve null si el denominador es 0. */
+function dividir(numerador: number, denominador: number): number | null {
   if (!denominador || denominador <= 0) return null
   return numerador / denominador
 }
 
-// ---------------------------------------------------------------------------
-//  Horas. hora_inicio y hora_final son TIME en PostgreSQL y Prisma los entrega
-//  como Date fijados al 1970-01-01 en UTC, asi que se leen y escriben siempre
-//  con los metodos UTC: la hora que se guarda es la que se ve.
-// ---------------------------------------------------------------------------
+// --- Horas: los campos TIME llegan como Date en UTC, se leen con metodos UTC ---
 
-/** "07:30" -> Date apto para un campo TIME de PostgreSQL. */
+/** "07:30" -> Date para un campo TIME. */
 export function horaADate(hora: string): Date {
   const [h, m] = hora.split(':').map(Number)
   return new Date(Date.UTC(1970, 0, 1, h || 0, m || 0, 0))
@@ -53,15 +40,15 @@ export function dateAHora(valor: Date | string): string {
   return `${h}:${m}`
 }
 
-/** Minutos brutos entre la hora de inicio y la hora final. */
-export function minutosJornada(inicio: Date | string, final: Date | string): number {
+/** Minutos entre hora de inicio y hora final. */
+function minutosJornada(inicio: Date | string, final: Date | string): number {
   const a = typeof inicio === 'string' ? new Date(inicio) : inicio
   const b = typeof final === 'string' ? new Date(final) : final
   return Math.round((b.getTime() - a.getTime()) / 60000)
 }
 
-/** tiempo_efectivo = hora_final - hora_inicio - tiempo_receso */
-export function minutosEfectivos(
+/** Minutos trabajados: final - inicio - receso. */
+function minutosEfectivos(
   inicio: Date | string,
   final: Date | string,
   recesoMin: number,
@@ -69,7 +56,7 @@ export function minutosEfectivos(
   return Math.max(0, minutosJornada(inicio, final) - (recesoMin || 0))
 }
 
-/** Minutos a formato "7h 30m". */
+/** Minutos a "7h 30m". */
 export function formatoDuracion(minutos: number): string {
   const h = Math.floor(minutos / 60)
   const m = Math.round(minutos % 60)
@@ -78,11 +65,9 @@ export function formatoDuracion(minutos: number): string {
   return `${h}h ${m}m`
 }
 
-// ---------------------------------------------------------------------------
-//  Nivel 1: la jornada
-// ---------------------------------------------------------------------------
+// --- Nivel 1: la jornada ---
 
-/** Forma minima de un registro para poder calcular su jornada. */
+/** Lo minimo de un registro para calcular su jornada. */
 export interface JornadaCalculable {
   m2Ejecutados: unknown
   m2Meta?: unknown
@@ -97,9 +82,9 @@ export interface IndicadoresJornada {
   minutosEfectivos: number
   horasEfectivas: number
   minutosReceso: number
-  /** m2 por hora efectiva. */
+  /** Cantidad por hora efectiva. */
   rendimiento: number | null
-  /** ejecutado del dia sobre la meta del dia. */
+  /** Ejecutado del dia / meta del dia. */
   cumplimiento: number | null
 }
 
@@ -125,11 +110,9 @@ export function indicadoresJornada(registro: JornadaCalculable): IndicadoresJorn
   }
 }
 
-// ---------------------------------------------------------------------------
-//  Nivel 2: la obra, es decir la cadena de registros
-// ---------------------------------------------------------------------------
+// --- Nivel 2: la obra (cadena de registros) ---
 
-/** El registro que abre la obra, con sus avances colgando. */
+/** Registro que abre la obra, con sus avances. */
 export interface ObraCalculable extends JornadaCalculable {
   largo?: unknown
   alto?: unknown
@@ -137,13 +120,7 @@ export interface ObraCalculable extends JornadaCalculable {
   avances?: JornadaCalculable[]
 }
 
-/**
- * Cuanto hay que ejecutar en una obra, en la unidad de su actividad.
- *
- * Es la cantidad_total que se copio al abrirla. Las obras anteriores a esa
- * columna no la tienen hasta que se corre db:constraints, y mientras tanto
- * valen lo que valian: largo x alto.
- */
+/** Cantidad total de la obra. Las obras viejas sin cantidad_total usan largo x alto. */
 export function cantidadDeObra(apertura: {
   cantidadTotal?: unknown
   largo?: unknown
@@ -163,7 +140,7 @@ export interface IndicadoresObra {
   horasEfectivas: number
   minutosReceso: number
   rendimiento: number | null
-  /** acumulado sobre el area del elemento: esto es lo que llega al 100%. */
+  /** Acumulado / cantidad total: llega al 100%. */
   avance: number
   completada: boolean
 }
@@ -192,17 +169,14 @@ export function indicadoresObra(raiz: ObraCalculable): IndicadoresObra {
     minutosReceso,
     rendimiento: dividir(m2Ejecutados, horasEfectivas),
     avance: m2Totales > 0 ? m2Ejecutados / m2Totales : 0,
-    // Con media centesima de tolerancia, para que un redondeo no deje una obra
-    // en 99,99% cuando en el terreno ya esta terminada.
+    // Tolerancia de media centesima por redondeo.
     completada: m2Totales > 0 && m2Ejecutados >= m2Totales - 0.005,
   }
 }
 
-// ---------------------------------------------------------------------------
-//  Nivel 3: agregados
-// ---------------------------------------------------------------------------
+// --- Nivel 3: varias obras ---
 
-/** Una jornada que sabe a que obra pertenece y cuanto mide esa obra. */
+/** Jornada que sabe a que obra pertenece y cuanto mide la obra. */
 export interface JornadaEncadenada extends JornadaCalculable {
   id: number
   registroOrigenId: number | null
@@ -212,21 +186,21 @@ export interface JornadaEncadenada extends JornadaCalculable {
   registroOrigen?: { largo?: unknown; alto?: unknown; cantidadTotal?: unknown } | null
 }
 
-/** Identificador de la obra a la que pertenece una jornada. */
+/** Id de la obra de una jornada. */
 export function claveDeObra(registro: Pick<JornadaEncadenada, 'id' | 'registroOrigenId'>) {
   return registro.registroOrigenId ?? registro.id
 }
 
-/** Cantidad total de la obra: la lleva el registro que la abrio. */
-export function areaDeObra(registro: JornadaEncadenada) {
+/** Cantidad total de la obra de una jornada. */
+function areaDeObra(registro: JornadaEncadenada) {
   return cantidadDeObra(registro.registroOrigen ?? registro)
 }
 
 export interface EstadoObras {
   obras: number
-  /** Area total de las obras, contada una sola vez por obra. */
+  /** Cantidad total, una vez por obra. */
   m2Totales: number
-  /** Lo ejecutado en TODA la cadena, no solo en el periodo filtrado. */
+  /** Ejecutado en toda la cadena, no solo en el periodo. */
   m2Acumulados: number
   m2Pendientes: number
   avance: number | null
@@ -234,17 +208,10 @@ export interface EstadoObras {
 }
 
 /**
- * Estado de un conjunto de obras a partir de sus CADENAS COMPLETAS.
- *
- * Existe porque el avance y el pendiente no son indicadores de periodo: si el
- * filtro cubre una semana, lo producido esa semana es la produccion, pero lo
- * que falta de un muro depende de todo lo que se hizo en el, tambien antes del
- * lunes. Mezclarlos daba un pendiente inflado y un avance corto.
- *
- * Quien llama decide hasta donde llega la cadena: pasando solo las jornadas
- * hasta la fecha "hasta" del filtro se obtiene el estado al cierre del periodo.
+ * Avance y pendiente de un grupo de obras, usando sus cadenas completas.
+ * El avance de un muro depende de todo lo hecho en el, no solo del periodo filtrado.
  */
-export function estadoDeObras(cadenas: JornadaEncadenada[]): EstadoObras {
+function estadoDeObras(cadenas: JornadaEncadenada[]): EstadoObras {
   const area = new Map<number, number>()
   const hecho = new Map<number, number>()
 
@@ -262,7 +229,6 @@ export function estadoDeObras(cadenas: JornadaEncadenada[]): EstadoObras {
     const suHecho = hecho.get(clave) ?? 0
     m2Totales += suArea
     m2Acumulados += suHecho
-    // Media centesima de tolerancia, como en indicadoresObra.
     if (suArea > 0 && suHecho >= suArea - 0.005) obrasTerminadas++
   }
 
@@ -278,10 +244,10 @@ export function estadoDeObras(cadenas: JornadaEncadenada[]): EstadoObras {
 
 export interface IndicadoresAgregados extends EstadoObras {
   registros: number
-  /** Lo producido en las jornadas filtradas. */
+  /** Ejecutado en las jornadas del periodo. */
   m2Ejecutados: number
   m2Meta: number
-  /** Jornadas sin meta: quedan fuera del cumplimiento, pero no de lo demas. */
+  /** Jornadas sin meta: no cuentan para el cumplimiento. */
   jornadasSinMeta: number
   horasEfectivas: number
   minutosReceso: number
@@ -290,16 +256,10 @@ export interface IndicadoresAgregados extends EstadoObras {
 }
 
 /**
- * Agrega un conjunto de jornadas.
- *
- * `registros` son las jornadas del periodo: de ahi salen produccion, horas,
- * rendimiento y cumplimiento. `cadenas` son las jornadas completas de esas
- * mismas obras, y de ahi sale el estado (area, acumulado, pendiente, avance).
- * Si no se pasan cadenas se usan los propios registros, que es lo correcto
- * cuando no hay filtro de fechas de por medio.
- *
- * El cumplimiento solo mira las jornadas que tienen meta: sumar la produccion
- * de un dia sin meta contra la meta de otro dia da un cumplimiento inventado.
+ * Indicadores de un grupo de jornadas.
+ * `registros`: jornadas del periodo (produccion, horas, rendimiento, cumplimiento).
+ * `cadenas`: jornadas completas de esas obras (cantidad, avance, pendiente).
+ * El cumplimiento solo usa las jornadas que tienen meta.
  */
 export function agregarIndicadores(
   registros: JornadaEncadenada[],
@@ -339,11 +299,7 @@ export function agregarIndicadores(
   }
 }
 
-/**
- * Agrupa jornadas por una clave y calcula los indicadores de cada grupo. Es la
- * base de los cortes del panel: por torre, piso, zona, actividad, cuadrilla o
- * trabajador.
- */
+/** Agrupa jornadas por una clave (torre, actividad, cuadrilla...) y calcula cada grupo. */
 export function agruparIndicadores<T extends JornadaEncadenada>(
   registros: T[],
   clave: (registro: T) => string,
@@ -359,13 +315,11 @@ export function agruparIndicadores<T extends JornadaEncadenada>(
       grupos.set(k, { etiqueta: etiqueta ? etiqueta(registro) : k, items: [] })
     }
     grupos.get(k)!.items.push(registro)
-    // Para repartir las cadenas: una obra pertenece siempre al mismo grupo,
-    // porque su ubicacion y su actividad no cambian a mitad de la cadena.
+    // Cada obra queda en un solo grupo: su ubicacion y actividad no cambian.
     grupoDeObra.set(claveDeObra(registro), k)
   }
 
-  // Las jornadas de fuera del periodo se llevan al grupo de su obra, para que
-  // el area y el acumulado de cada corte sean los de la obra completa.
+  // Las jornadas fuera del periodo se suman al grupo de su obra.
   const cadenasPorGrupo = new Map<string, JornadaEncadenada[]>()
   if (cadenas) {
     for (const r of cadenas) {

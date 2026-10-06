@@ -1,10 +1,4 @@
-/**
- * Encabezado de pagina.
- *
- * El antetitulo es la linea pequeña en mayusculas encima del titulo. Dice en
- * que parte del sistema esta parado el residente, que es lo que se responde de
- * un vistazo, y deja el titulo libre para decir que se esta viendo.
- */
+/** Encabezado de pagina: antetitulo pequeno, titulo, descripcion y acciones. */
 export function EncabezadoPagina({
   antetitulo,
   titulo,
@@ -15,7 +9,7 @@ export function EncabezadoPagina({
   antetitulo?: string
   titulo: string
   descripcion?: string
-  /** Linea de datos sueltos bajo el titulo: fechas, estado, conteos. */
+  /** Linea de datos bajo el titulo: fechas, estado, conteos. */
   meta?: React.ReactNode
   acciones?: React.ReactNode
 }) {
@@ -37,7 +31,12 @@ export function EncabezadoPagina({
           </div>
         )}
       </div>
-      {acciones && <div className="flex shrink-0 flex-wrap gap-2">{acciones}</div>}
+      {/* En celular los botones van uno debajo del otro, a todo el ancho. */}
+      {acciones && (
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:shrink-0 sm:flex-row sm:flex-wrap [&>*]:w-full sm:[&>*]:w-auto">
+          {acciones}
+        </div>
+      )}
     </div>
   )
 }
@@ -52,7 +51,7 @@ export function EstadoVacio({
   accion?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-obra-300 bg-white px-6 py-14 text-center">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-obra-200 bg-white px-6 py-14 text-center">
       <p className="font-medium text-obra-900">{titulo}</p>
       <p className="mt-1 max-w-sm text-sm text-obra-500">{mensaje}</p>
       {accion && <div className="mt-5">{accion}</div>}

@@ -1,12 +1,10 @@
 /**
- * Carga el juego de datos del Excel "Dashboard Residente de obra" en la base.
+ * Carga los datos del Excel prototipo en la base.
  *
  *   npm run importar
  *
- * Es idempotente: reconstruye la jerarquia buscando antes de crear, asi que se
- * puede correr varias veces sin duplicar nada. Al terminar recalcula los
- * indicadores desde la base y los compara contra los del Excel, que es la
- * prueba de que el modelo relacional reproduce el prototipo.
+ * Se puede correr varias veces sin duplicar. Al final compara los indicadores
+ * con los del Excel.
  */
 require('dotenv').config()
 
@@ -16,9 +14,7 @@ const { PrismaClient } = require('@prisma/client')
 
 const prisma = new PrismaClient()
 
-// El juego de datos no se versiona: es informacion de la obra, no codigo. En un
-// clon nuevo no existe, y conviene decirlo con todas las letras en vez de
-// fallar con un ENOENT de Node.
+// El archivo de datos no esta en git; se avisa si falta.
 const RUTA_DATOS = path.join(__dirname, 'datos-prototipo.json')
 if (!fs.existsSync(RUTA_DATOS)) {
   console.error(
@@ -51,7 +47,7 @@ async function main() {
     throw new Error('No hay ningun usuario ADMIN. Corre "npm run seed" antes de importar.')
   }
 
-  // --- Proyecto -------------------------------------------------------------
+  // --- Proyecto ---
   const proyecto = await prisma.proyecto.upsert({
     where: { codigo: datos.proyecto.codigo },
     update: {},
@@ -64,7 +60,7 @@ async function main() {
     },
   })
 
-  // --- Catalogos ------------------------------------------------------------
+  // --- Catalogos ---
   const cargos = {}
   for (const nombre of datos.cargos) {
     cargos[nombre] = await prisma.cargo.upsert({
@@ -83,7 +79,7 @@ async function main() {
     })
   }
 
-  // --- Personal -------------------------------------------------------------
+  // --- Personal ---
   const trabajadores = {}
   for (const t of datos.trabajadores) {
     let registro = await prisma.trabajador.findFirst({
@@ -118,15 +114,13 @@ async function main() {
         cuadrillaId: cuadrillas[a.cuadrilla].id,
         trabajadorId,
         fechaInicio: fecha(a.fechaInicio),
-        // Explicito a proposito: la busqueda de arriba filtra por activo, y
-        // depender del valor por defecto haria que en una segunda corrida el
-        // chequeo no encontrara la asignacion y la volviera a crear.
+        // activo explicito: la busqueda de arriba filtra por activo.
         activo: true,
       },
     })
   }
 
-  // --- Metas derivadas ------------------------------------------------------
+  // --- Metas ---
   for (const m of datos.metas) {
     const existente = await prisma.meta.findFirst({
       where: {
@@ -147,7 +141,7 @@ async function main() {
     })
   }
 
-  // --- Jerarquia y registros ------------------------------------------------
+  // --- Jerarquia y registros ---
   const cache = { torres: {}, pisos: {}, zonas: {}, elementos: {} }
 
   for (const r of datos.registros) {
@@ -205,8 +199,6 @@ async function main() {
             descripcion: r.descripcion,
           },
         },
-        // Las medidas viven en el elemento: cada fila del Excel trae las de su
-        // muro, y son las que luego hereda el registro de obra.
         update: { largo: r.largo, alto: r.alto },
         create: {
           zonaId: zona.id,
@@ -221,7 +213,7 @@ async function main() {
     }
     const elemento = cache.elementos[claveElemento]
 
-    // Registro de ejecucion
+    // Registro de obra
     const existente = await prisma.registroEjecucion.findUnique({
       where: { codigoRegistro: r.codigo },
     })
@@ -237,12 +229,10 @@ async function main() {
         cuadrillaId: cuadrillas[r.cuadrilla].id,
         trabajadorId: trabajadores[r.trabajador].id,
         usuarioRegistraId: usuario.id,
-        // Cada fila del Excel abre su propia obra, y se queda con la copia de
-        // las medidas de su elemento: es lo que fija su 100%.
+        // Cada fila del Excel abre su propia obra.
         largo: r.largo,
         alto: r.alto,
-        // Todas las actividades del Excel se miden en m2: la cantidad total de
-        // la obra es largo x alto.
+        // Todas las actividades del Excel son m2: cantidad = largo x alto.
         cantidadTotal: Math.round(r.largo * r.alto * 100) / 100,
         m2Ejecutados: r.m2Ejecutados,
         horaInicio: hora(r.horaInicio),
@@ -256,10 +246,7 @@ async function main() {
   await verificar()
 }
 
-/**
- * Recalcula los indicadores desde la base y los compara con los del Excel.
- * Si algo no cuadra, el problema esta en los datos importados, no en la app.
- */
+/** Recalcula los indicadores desde la base y los compara con los del Excel. */
 async function verificar() {
   const registros = await prisma.registroEjecucion.findMany({
     select: {
@@ -288,7 +275,7 @@ async function verificar() {
     const minutos =
       (r.horaFinal.getTime() - r.horaInicio.getTime()) / 60000 - r.tiempoRecesoMin
     horas += minutos / 60
-    // El area de cada obra cuenta una sola vez, aunque tenga varios registros.
+    // El area de cada obra cuenta una sola vez.
     const clave = r.registroOrigenId ?? r.id
     if (!areaPorObra.has(clave)) {
       const medidas = r.registroOrigen ?? r
@@ -298,7 +285,7 @@ async function verificar() {
 
   const m2Totales = Array.from(areaPorObra.values()).reduce((a, b) => a + b, 0)
 
-  // SUM(numerador) / SUM(denominador). Nunca el promedio de los indicadores.
+  // SUM(numerador) / SUM(denominador), nunca promedios.
   const calculado = {
     m2Ejecutados,
     m2Totales,

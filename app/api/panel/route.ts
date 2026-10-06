@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma'
+import { fechaExiste } from '@/lib/dominio'
 import { ok, manejarError, exigirSesion } from '@/lib/api'
 import { camposIndicadores, camposPanel, filtroRegistros } from '@/lib/consultas'
 import {
@@ -8,24 +9,13 @@ import {
   indicadoresJornada,
 } from '@/lib/calculos'
 
-/**
- * Todo lo que pinta el panel, calculado en el servidor a partir de los mismos
- * filtros que ve el residente.
- *
- * Se calcula aqui y no en el navegador por dos razones: con muchos registros
- * el navegador se arrastraria, y asi las graficas usan exactamente las mismas
- * formulas de lib/calculos que la pantalla de ejecucion y los informes, sin
- * riesgo de que dos sitios den numeros distintos.
- */
+/** Todos los datos del panel, calculados en el servidor con los filtros elegidos. */
 export async function GET(request: Request) {
   try {
     await exigirSesion()
     const parametros = new URL(request.url).searchParams
 
-    // Las dos consultas salen a la vez: son independientes y encadenarlas era
-    // pagar dos veces la latencia de ir hasta la base.
-    // La unidad no entra en la consulta: primero se ve que unidades hay en lo
-    // filtrado, y luego se elige una.
+    // Las dos consultas van en paralelo. La unidad se aplica despues.
     const sinUnidad = new URLSearchParams(parametros)
     sinUnidad.delete('unidad')
 
@@ -33,12 +23,10 @@ export async function GET(request: Request) {
       prisma.registroEjecucion.findMany({
         where: filtroRegistros(sinUnidad),
         orderBy: { fechaEjecucion: 'asc' },
-        // Solo las columnas que entran en algun calculo o en alguna etiqueta.
-        // Aqui no se pagina a proposito: un indicador calculado sobre media
-        // lista es un numero equivocado, no un numero incompleto.
+        // Sin paginar: un indicador sobre media lista seria un numero equivocado.
         select: camposPanel,
       }),
-      // Rango de fechas disponible, para proponer el filtro la primera vez.
+      // Rango de fechas con registros, para el filtro inicial.
       prisma.registroEjecucion.aggregate({
         _min: { fechaEjecucion: true },
         _max: { fechaEjecucion: true },
@@ -46,12 +34,8 @@ export async function GET(request: Request) {
     ])
 
     /**
-     * El panel mide en UNA sola unidad.
-     *
-     * Pañete en m2, filo en metros lineales y tomacorrientes en unidades no se
-     * pueden sumar: 45 m2 + 10 ml no son 55 de nada. Se cuentan las jornadas de
-     * cada unidad dentro del filtro, se usa la que pidio el usuario si existe y,
-     * si no, la que mas jornadas tiene. Las demas se ofrecen en el selector.
+     * El panel mide en una sola unidad (m2, ml, und...): la pedida, o la que
+     * mas jornadas tiene. Las demas se ofrecen en el selector.
      */
     const cuentaPorUnidad = new Map<string, number>()
     for (const r of todas) {
@@ -70,18 +54,13 @@ export async function GET(request: Request) {
     const registros = todas.filter((r) => r.actividad.unidadMedida === unidad)
 
     /**
-     * Las cadenas completas de las obras que aparecen en el periodo.
-     *
-     * Hace falta una segunda consulta porque el avance y el pendiente de un
-     * muro no dependen del rango de fechas: se calculan sobre todo lo que se
-     * hizo en el, tambien antes del "desde". Se corta en el "hasta" para que
-     * el numero sea el estado al cierre del periodo y no el de hoy.
-     *
-     * Es barata: filtra por id y por id_registro_origen, los dos indexados, y
-     * trae solo las columnas de los calculos.
+     * Cadenas completas de las obras del periodo, hasta la fecha "hasta".
+     * Asi el avance es el estado al cierre del periodo.
      */
     const clavesDeObra = [...new Set(registros.map(claveDeObra))]
-    const hasta = parametros.get('hasta')
+    // Solo una fecha bien escrita; si no, se ignora.
+    const hastaTexto = parametros.get('hasta')
+    const hasta = hastaTexto && fechaExiste(hastaTexto) ? hastaTexto : null
     const cadenas = clavesDeObra.length
       ? await prisma.registroEjecucion.findMany({
           where: {
@@ -99,10 +78,7 @@ export async function GET(request: Request) {
 
     const soloFecha = (f: Date | null) => (f ? f.toISOString().slice(0, 10) : null)
 
-    // --- Corte por actividad -------------------------------------------------
-    // Cuanto se hizo de pañete, de estuco, de mamposteria... en el lapso que
-    // marcan los filtros. Va encima de la produccion por dia, que responde
-    // "cuanto" pero no "de que".
+    // --- Por actividad ---
     const porActividad = agruparIndicadores(
       registros,
       (r) => String(r.actividadId),
@@ -117,17 +93,15 @@ export async function GET(request: Request) {
         cumplimiento: a.cumplimiento,
         obras: a.obras,
         registros: a.registros,
-        // La parte que le toca de la produccion del periodo.
+        // Parte de la produccion del periodo.
         participacion:
           indicadores.m2Ejecutados > 0 ? a.m2Ejecutados / indicadores.m2Ejecutados : 0,
       }))
       .sort((a, b) => b.m2Ejecutados - a.m2Ejecutados)
 
-    // --- Corte por dia -------------------------------------------------------
-    // Solo aparecen los dias con registros: un dia sin trabajo no ocupa lugar.
+    // --- Por dia (solo dias con registros) ---
 
-    // Reparto de cada dia entre actividades, para que la vista de tabla de la
-    // grafica muestre el desglose sin depender de pasar el mouse por encima.
+    // Reparto del dia por actividad, para la tabla de la grafica.
     const repartoDelDia = new Map<string, Record<string, number>>()
     for (const r of registros) {
       const dia = r.fechaEjecucion.toISOString().slice(0, 10)
@@ -144,9 +118,7 @@ export async function GET(request: Request) {
       .map((d) => ({
         fecha: d.clave,
         m2Ejecutados: d.m2Ejecutados,
-        // La meta del dia sale de los m2Meta que lleva cada registro. Es lo que
-        // permite dibujar la curva acumulada de real contra planificado sin
-        // inventarse un programa de obra que el sistema no tiene.
+        // Meta del dia = suma de las metas de sus registros.
         m2Meta: d.m2Meta,
         horasEfectivas: d.horasEfectivas,
         rendimiento: d.rendimiento,
@@ -155,9 +127,7 @@ export async function GET(request: Request) {
       }))
       .sort((a, b) => a.fecha.localeCompare(b.fecha))
 
-    // --- Corte por ubicacion -------------------------------------------------
-    // Baja de nivel segun hasta donde haya filtrado: si eligio una torre, la
-    // grafica pasa a mostrar sus pisos, y asi sucesivamente.
+    // --- Por ubicacion: baja un nivel segun el filtro (torre -> pisos -> zonas) ---
     const hay = (clave: string) => Boolean(Number(parametros.get(clave)))
     const nivel = hay('zonaId')
       ? 'elemento'
@@ -201,7 +171,7 @@ export async function GET(request: Request) {
       }))
       .sort((a, b) => b.m2Totales - a.m2Totales)
 
-    // --- Corte por cuadrilla -------------------------------------------------
+    // --- Por cuadrilla ---
     const porCuadrilla = agruparIndicadores(
       registros,
       (r) => String(r.cuadrillaId),
@@ -222,8 +192,7 @@ export async function GET(request: Request) {
       unidad,
       unidades,
       indicadores,
-      // Sale de las cadenas completas: una obra terminada esta semana cuenta
-      // aunque empezara el mes pasado.
+      // Obras al 100% (con sus cadenas completas).
       obrasTerminadas: indicadores.obrasTerminadas,
       nivelUbicacion: nivel,
       porActividad,
@@ -234,8 +203,7 @@ export async function GET(request: Request) {
         desde: soloFecha(extremos._min.fechaEjecucion),
         hasta: soloFecha(extremos._max.fechaEjecucion),
       },
-      // El promedio de la obra filtrada: sirve de referencia en las graficas,
-      // y sale de los mismos datos, no de una meta inventada.
+      // Rendimiento promedio, como referencia en las graficas.
       rendimientoPromedio: indicadores.rendimiento,
     })
   } catch (error) {

@@ -1,6 +1,5 @@
-// En Next.js 16 el middleware se llama proxy.ts. Aqui solo se decide si la
-// peticion llega o no a una ruta protegida; los permisos finos por rol se
-// validan en cada API Route con exigirPermiso().
+// Proxy de Next.js 16 (antes middleware): exige sesion en las rutas protegidas.
+// Los permisos por rol se validan en cada API Route.
 import { withAuth } from 'next-auth/middleware'
 
 export default withAuth({
@@ -19,7 +18,6 @@ export const config = {
     '/ejecucion/:path*',
     '/tareas/:path*',
     '/liquidaciones/:path*',
-    '/informes/:path*',
     '/usuarios/:path*',
   ],
 }

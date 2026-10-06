@@ -19,7 +19,7 @@ export function FormMeta({
   onCerrar: () => void
   onGuardado: () => void
 }) {
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
   const { datos: proyectos } = useRecurso<Proyecto>(abierto ? '/api/proyectos' : null)
   const { datos: actividades } = useRecurso<Actividad>(abierto ? '/api/actividades?activas=1' : null)
   const { datos: cargos } = useRecurso<Cargo>(abierto ? '/api/cargos' : null)

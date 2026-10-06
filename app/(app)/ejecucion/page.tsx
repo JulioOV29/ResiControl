@@ -55,10 +55,8 @@ const filtrosVacios = {
 }
 
 /**
- * Los filtros de esta pantalla son los mismos cuatro que los del panel, asi
- * que se condicionan igual: cada uno solo ofrece lo que tiene registros
- * detras. La seleccion se traduce a las ocho dimensiones que entiende
- * lib/filtrosRelacionales, y de vuelta solo se leen las cuatro de aqui.
+ * Los cuatro filtros de esta pantalla, traducidos a las dimensiones de
+ * lib/filtrosRelacionales para que se condicionen igual que en el panel.
  */
 const SELECCION_VACIA: SeleccionFiltros = {
   proyectoId: '',
@@ -83,8 +81,7 @@ export default function EjecucionPage() {
   const [filtros, setFiltros] = useState(filtrosVacios)
   const puede = usePuede()
 
-  // Los filtros se aplican cuando el usuario deja de moverlos: un campo de
-  // fecha dispara onChange varias veces mientras se escribe.
+  // Los filtros se aplican cuando el usuario deja de cambiarlos.
   const filtrosAplicados = useRetardo(filtros)
 
   const consulta = useMemo(() => {
@@ -97,31 +94,19 @@ export default function EjecucionPage() {
   const { dato, cargando, recargar, recargarEnSilencio, actualizar } =
     useRecursoUnico<ListaRegistros>(consulta)
 
-  // El resumen viene calculado del servidor, sobre TODO lo que cumple el
-  // filtro. Antes se sumaba aqui a partir de las filas recibidas, que es lo
-  // mismo solo mientras la lista quepa entera.
   const datos = useMemo(() => dato?.registros ?? [], [dato])
 
-  /**
-   * Un resumen por unidad: m2, ml y und no se suman. Se muestra el de la unidad
-   * elegida, o el de la que mas jornadas tiene; si hay varias, unos botones
-   * permiten pasar de una a otra.
-   */
+  /** Un resumen por unidad (m2, ml, und no se suman). Si hay varias, se elige con botones. */
   const [unidadResumen, setUnidadResumen] = useState('')
   const resumenes = dato?.resumenes ?? []
   const resumen = resumenes.find((r) => r.unidad === unidadResumen) ?? resumenes[0]
   const uni = resumen?.unidad ?? 'm2'
 
-  /**
-   * Un solo viaje para los desplegables, con las combinaciones reales de los
-   * registros: con ellas los filtros se condicionan entre si sin volver al
-   * servidor, igual que en el panel.
-   */
+  /** Catalogos con combinaciones reales, para los filtros relacionados. */
   const { dato: catalogos, recargarEnSilencio: recargarCatalogos } =
     useRecursoUnico<Catalogos>('/api/catalogos?combinaciones=1')
 
-  // Al volver a esta pestana se piden otra vez: lo que se haya dado de alta
-  // mientras tanto aparece en los filtros sin recargar la pagina.
+  // Recarga los catalogos al volver a la pestana.
   useRefrescoAlVolver(recargarCatalogos)
 
   const filas = useMemo(
@@ -134,17 +119,10 @@ export default function EjecucionPage() {
     [filas, filtros],
   )
 
-  // Las opciones se escriben como en el panel: lo que cuelga de un proyecto
-  // lleva su codigo detras de un guion.
   const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
 
-  // Lo que existe pero no cuadra con los demas filtros desaparece de la lista,
-  // en vez de quedar en gris. Mientras los catalogos no hayan llegado no se
-  // descarta nada.
-  //
-  // La excepcion, igual que en el panel: lo que no aparece en ningun registro
-  // (una actividad o una cuadrilla recien creada) no se esconde. La regla
-  // relacional no tiene nada que decir de algo sin jornadas detras.
+  // Solo se ofrecen opciones con registros compatibles con los demas filtros.
+  // Lo que aun no tiene registros se ofrece siempre.
   const conRegistros = useMemo(() => idsConRegistros(filas), [filas])
 
   const soloDisponibles = <T extends { id: number }>(dimension: Dimension, lista: T[]) =>
@@ -157,8 +135,7 @@ export default function EjecucionPage() {
   const proyectos = soloDisponibles('proyectoId', catalogos?.proyectos ?? [])
   const actividades = soloDisponibles('actividadId', catalogos?.actividades ?? [])
 
-  // La torre ya no espera a que se elija proyecto: si solo hay obra en una, es
-  // la unica que se ofrece, y elegirla deja el proyecto implicito.
+  // Las torres se ofrecen aunque no haya proyecto elegido.
   const torres = useMemo(
     () =>
       soloDisponibles(
@@ -181,10 +158,7 @@ export default function EjecucionPage() {
     [catalogos, filtros.proyectoId, filas, disponibles],
   )
 
-  /**
-   * Todo cambio de filtro pasa por aqui: lo que se acaba de elegir manda, y lo
-   * que ya no cuadra con ello se suelta solo.
-   */
+  /** Aplica un cambio de filtro y suelta lo que ya no sea compatible. */
   const cambiar = (campos: Partial<typeof filtrosVacios>) =>
     setFiltros((f) => {
       const propuesta = { ...f, ...campos }
@@ -201,11 +175,7 @@ export default function EjecucionPage() {
       }
     })
 
-  /**
-   * Al guardar, la fila se pone en pantalla de inmediato y el resumen se pone
-   * al dia en segundo plano: la tabla no parpadea y las cifras no se quedan
-   * viejas.
-   */
+  /** Al guardar, la fila aparece de inmediato y el resumen se actualiza en segundo plano. */
   const agregarAlInicio = (nuevo: Registro) => {
     actualizar((previo) => ({ ...previo, registros: [nuevo, ...previo.registros] }))
     recargarEnSilencio()
@@ -323,7 +293,7 @@ export default function EjecucionPage() {
           <span
             className={
               i.cumplimiento !== null && i.cumplimiento >= 1
-                ? 'font-medium text-emerald-600'
+                ? 'font-medium text-menta-700'
                 : undefined
             }
           >
@@ -338,7 +308,11 @@ export default function EjecucionPage() {
       render: (r) =>
         r.registroAnterior ? (
           <button
-            onClick={() => setVerRegistro(r.registroAnterior!.id)}
+            onClick={(e) => {
+              // Sin esto, el clic tambien llega a la fila y abre el registro de la fila.
+              e.stopPropagation()
+              setVerRegistro(r.registroAnterior!.id)
+            }}
             title={`Ver el registro ${r.registroAnterior.codigoRegistro}`}
             className="inline-flex items-center gap-1.5 rounded-lg border border-obra-200 px-2 py-1 text-xs font-medium text-obra-700 hover:border-acento-400 hover:bg-acento-50"
           >
@@ -376,7 +350,7 @@ export default function EjecucionPage() {
       />
 
       <Tarjeta className="mb-4">
-        <TarjetaCuerpo className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <TarjetaCuerpo className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
           <Seleccion
             value={filtros.proyectoId}
             onChange={(e) => cambiar({ proyectoId: e.target.value })}
@@ -462,7 +436,7 @@ export default function EjecucionPage() {
                   onClick={() => setUnidadResumen(r.unidad)}
                   className={
                     r.unidad === uni
-                      ? 'rounded-full bg-obra-900 px-3 py-1 font-medium text-white'
+                      ? 'rounded-full bg-marca-600 px-3 py-1 font-medium text-white'
                       : 'rounded-full border border-obra-200 px-3 py-1 text-obra-600 hover:bg-obra-50'
                   }
                 >
@@ -472,8 +446,8 @@ export default function EjecucionPage() {
               <span className="text-obra-400">m2, ml y und no se suman entre si.</span>
             </div>
           )}
-          {/* Las mismas tarjetas del panel: un solo componente, un solo aspecto. */}
-          <div className="mb-4 grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-7">
+          {/* Tarjetas de indicadores */}
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 xl:grid-cols-4 2xl:grid-cols-7">
             <Indicador
               etiqueta="Produccion"
               valor={formatoNumero(resumen.m2Ejecutados)}
@@ -586,7 +560,7 @@ export default function EjecucionPage() {
         onGuardado={(creado) => {
           const eraNuevo = formObra.registro === null
           setFormObra({ abierto: false, registro: null })
-          // La fila aparece al instante y la recarga deja la lista ordenada.
+          // La fila aparece al instante; la recarga deja la lista ordenada.
           if (eraNuevo) agregarAlInicio(creado)
           recargar()
         }}

@@ -1,11 +1,8 @@
-/**
- * Formas que viajan del servidor al cliente. Son las entidades de Prisma ya
- * serializadas: los Decimal llegan como number y las fechas como texto ISO.
- */
+/** Datos tal como llegan de la API: Decimal como number y fechas como texto ISO. */
 
-export type EstadoProyecto = 'PLANEACION' | 'EN_EJECUCION' | 'SUSPENDIDO' | 'FINALIZADO'
-export type EstadoEjecucion = 'PENDIENTE' | 'EN_PROCESO' | 'TERMINADO' | 'SUSPENDIDO'
-export type Rol = 'ADMIN' | 'RESIDENTE' | 'SUPERVISOR'
+import type { EstadoEjecucion, EstadoProyecto, Rol } from '@/lib/dominio'
+
+export type { EstadoEjecucion, EstadoProyecto, Rol }
 
 export interface Proyecto {
   id: number
@@ -54,9 +51,12 @@ export interface Elemento {
   codigoDwg: string
   descripcion: string
   unidad: string | null
-  /** Las medidas viven aqui: la tarea y el registro de obra las heredan. */
+  /** Medidas del elemento (solo se guardan aqui). */
   largo: number
   alto: number
+  /** Suma del area de los vanos. */
+  areaVanos: number
+  vanos?: Vano[]
   estado: EstadoEjecucion
   zona?: {
     codigo: string
@@ -66,7 +66,15 @@ export interface Elemento {
   _count?: { registros: number }
 }
 
-/** Ubicacion completa de un elemento, tal como la devuelven los registros. */
+/** Elemento con su ubicacion completa. */
+/** Hueco de un elemento (ventana, puerta...). */
+export interface Vano {
+  id: number
+  descripcion: string | null
+  largo: number
+  ancho: number
+}
+
 export interface ElementoUbicado {
   id: number
   codigoDwg: string
@@ -74,6 +82,7 @@ export interface ElementoUbicado {
   unidad: string | null
   largo: number
   alto: number
+  areaVanos: number
   zona: {
     id: number
     codigo: string
@@ -108,7 +117,7 @@ export interface Cargo {
   _count?: { trabajadores: number }
 }
 
-/** Lo que se le paga a un trabajador por metro de una actividad. */
+/** Precio por unidad de una actividad para un trabajador. */
 export interface Tarifa {
   id?: number
   actividadId: number
@@ -125,7 +134,7 @@ export interface Trabajador {
   activo: boolean
   cargo?: { id: number; nombre: string }
   asignaciones?: Array<{ id: number; cuadrilla: { id: number; nombre: string } }>
-  /** Sus precios por metro, uno por actividad. */
+  /** Precios del trabajador, uno por actividad. */
   tarifas?: Tarifa[]
 }
 
@@ -153,8 +162,7 @@ export interface Asignacion {
     apellido: string
     documento: string | null
     cargo: { id: number; nombre: string }
-    /** Sus precios por metro: con ellos el formulario de registro sabe si la
-     * jornada va a quedar con importe o sin el. */
+    /** Precios del trabajador (para saber si puede hacer la actividad). */
     tarifas?: Array<{ actividadId: number; valorM2: number }>
   }
 }
@@ -203,26 +211,26 @@ export interface Registro {
   actividadId: number
   cuadrillaId: number
   trabajadorId: number | null
-  /** El dia anterior de esta obra. Nulo si este registro la abrio. */
+  /** Registro anterior. Null en la apertura. */
   registroAnteriorId: number | null
-  /** El registro que abrio la obra. Nulo si este es ese registro. */
+  /** Registro que abrio la obra. Null en la apertura. */
   registroOrigenId: number | null
-  /** La tarea de la que nacio la obra. Solo la lleva la apertura. */
+  /** Tarea de origen. Solo en la apertura. */
   tareaId: number | null
   tarea?: { id: number; codigo: string } | null
-  /** Numero del subregistro dentro de su obra: 1, 2, 3. Nulo en la apertura. */
+  /** Numero de avance (1, 2, 3...). Null en la apertura. */
   numeroAvance: number | null
-  /** Medidas del elemento. Solo las lleva el registro que abre la obra. */
+  /** Medidas del elemento. Solo en la apertura. */
   largo: number | null
   alto: number | null
-  /** Cantidad total de la obra en la unidad de su actividad. Solo en la apertura. */
+  /** Cantidad total de la obra. Solo en la apertura. */
   cantidadTotal: number | null
   m2Ejecutados: number
   horaInicio: string
   horaFinal: string
   tiempoRecesoMin: number
   m2Meta: number | null
-  /** Tarifa que tenia el trabajador para esa actividad cuando se guardo. */
+  /** Precio por unidad copiado al guardar. */
   valorM2: number | null
   observaciones: string | null
   elemento?: ElementoUbicado
@@ -238,12 +246,12 @@ export interface Registro {
   registroAnterior?: ReferenciaRegistro | null
   registroOrigen?: ReferenciaRegistro | null
   continuacion?: { id: number; codigoRegistro: string; fechaEjecucion: string } | null
-  /** La liquidacion en que se pago esta jornada. */
+  /** Liquidacion en que se pago. */
   liquidacionId?: number | null
   liquidacion?: { id: number; codigo: string } | null
 }
 
-/** Una obra: el registro que la abrio, con toda su cadena de avances. */
+/** Obra: registro de apertura con sus avances. */
 export interface Obra extends Registro {
   avances: Array<{
     id: number
@@ -271,11 +279,7 @@ export interface Obra extends Registro {
   }
 }
 
-/**
- * Los catalogos que llenan los desplegables de filtro, tal como los entrega
- * /api/catalogos: solo los campos que se pintan, y la jerarquia de ubicacion
- * completa para poder encadenar los filtros sin volver al servidor.
- */
+/** Catalogos de /api/catalogos para llenar filtros y formularios. */
 export interface Catalogos {
   proyectos: Array<{ id: number; codigo: string; nombre: string }>
   torres: Array<{ id: number; proyectoId: number; codigo: string; nombre: string }>
@@ -292,17 +296,13 @@ export interface Catalogos {
   }>
   cargos: Array<{ id: number; nombre: string }>
   /**
-   * Combinaciones que existen de verdad en los registros: [zonaId, actividadId,
-   * cuadrillaId, trabajadorId]. Solo llega si se pide con ?combinaciones=1, y
-   * es lo que permite que los filtros del panel se condicionen entre si.
+   * Combinaciones reales [zonaId, actividadId, cuadrillaId, trabajadorId].
+   * Solo con ?combinaciones=1.
    */
   combinaciones?: Array<[number, number, number, number | null]>
 }
 
-/**
- * Una tarea asignada, tal como la entrega /api/tareas: con su ubicacion
- * completa, a quien se le asigno y la obra que nacio de ella, si ya nacio.
- */
+/** Tarea con su ubicacion, asignados y la obra que nacio de ella. */
 export interface Tarea {
   id: number
   codigo: string
@@ -325,7 +325,7 @@ export interface Tarea {
     cargo: { id: number; nombre: string }
   } | null
   usuarioAsigna?: { id: number; nombre: string; apellido: string }
-  /** La obra que salio de la tarea. Null mientras no se haya registrado nada. */
+  /** Obra que nacio de la tarea. Null si aun no hay. */
   registro?: {
     id: number
     codigoRegistro: string
@@ -336,21 +336,18 @@ export interface Tarea {
   } | null
 }
 
-/** Lo que devuelve /api/registros: la lista y su resumen ya calculado. */
+/** Respuesta de /api/registros. */
 export interface ListaRegistros {
   registros: Registro[]
-  /**
-   * Un resumen por unidad de medida (m2, ml, und...), de la que mas jornadas
-   * tiene a la que menos. Nunca se suman unidades distintas.
-   */
+  /** Un resumen por unidad de medida; nunca se mezclan unidades. */
   resumenes: Array<{
     unidad: string
     registros: number
     obras: number
     m2Totales: number
-    /** Producido en las jornadas filtradas. */
+    /** Ejecutado en el periodo. */
     m2Ejecutados: number
-    /** Producido en las cadenas completas de esas obras. */
+    /** Ejecutado en toda la cadena de esas obras. */
     m2Acumulados: number
     m2Pendientes: number
     m2Meta: number
@@ -362,13 +359,11 @@ export interface ListaRegistros {
     avance: number | null
     obrasTerminadas: number
   }>
-  /** true cuando el filtro daba mas registros de los que caben en la pagina. */
+  /** true si hay mas registros de los que se devolvieron. */
   truncado: boolean
 }
 
-// ---------------------------------------------------------------------------
-//  Liquidaciones
-// ---------------------------------------------------------------------------
+// --- Liquidaciones ---
 
 export interface LineaLiquidacion {
   actividadId: number
@@ -380,7 +375,7 @@ export interface LineaLiquidacion {
   subtotal: number
 }
 
-/** Una jornada vista desde una liquidacion. */
+/** Jornada dentro de una liquidacion. */
 export interface JornadaLiquidacion {
   id: number
   codigoRegistro: string
@@ -422,7 +417,7 @@ export interface Liquidacion {
   _count?: { registros: number }
 }
 
-/** Lo que devuelve /api/liquidaciones/previa. */
+/** Respuesta de /api/liquidaciones/previa. */
 export interface PreviaLiquidacion {
   trabajador: TrabajadorLiquidado
   ultimaCuenta: { banco: string | null; tipoCuenta: string | null; numeroCuenta: string } | null
@@ -433,4 +428,6 @@ export interface PreviaLiquidacion {
   jornadas: JornadaLiquidacion[]
   sinPrecio: JornadaLiquidacion[]
   yaPagadas: JornadaLiquidacion[]
+  /** Jornadas sin pagar con fecha anterior al lapso. */
+  pendientesAnteriores: { jornadas: number; desde: string | null }
 }

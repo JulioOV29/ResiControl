@@ -15,9 +15,9 @@ import type { Catalogos, Liquidacion, PreviaLiquidacion } from '@/types/dominio'
 const vacio = {
   trabajadorId: '',
   tipoPeriodo: '' as PeriodoLiquidacion | '',
-  /** aaaa-mm: lo usan MES y QUINCENA. */
+  /** aaaa-mm (MES y QUINCENA). */
   mes: '',
-  /** '1' = del 1 al 15, '2' = del 16 al fin de mes. */
+  /** '1' = del 1 al 15, '2' = del 16 a fin de mes. */
   quincena: '',
   /** Solo RANGO. */
   desde: '',
@@ -28,7 +28,7 @@ const vacio = {
   observaciones: '',
 }
 
-/** Las tres formas de elegir el lapso. Elegir una limpia las otras dos. */
+/** Formas de elegir el periodo. Elegir una limpia las otras. */
 const OPCIONES_PERIODO: Array<{
   valor: PeriodoLiquidacion
   titulo: string
@@ -40,19 +40,16 @@ const OPCIONES_PERIODO: Array<{
   { valor: 'RANGO', titulo: 'Rango', detalle: 'Fechas a eleccion', icono: CalendarRange },
 ]
 
-/** La cuenta en una linea, para el aviso. */
+/** Cuenta en una linea, para el aviso. */
 const cuentaEnTexto = (banco: string, tipo: string, numero: string) =>
   [banco.trim(), tipo ? tipo.charAt(0) + tipo.slice(1).toLowerCase() : '', numero.trim()]
     .filter(Boolean)
     .join(' · ')
 
 /**
- * Liquidar: pagarle a un trabajador lo que ejecuto en un lapso, a los precios
- * que tenia acordados.
- *
- * Primero se elige a quien y el lapso; con eso aparece la vista previa, que es
- * el mismo calculo que hara el servidor al guardar. Luego la cuenta, y antes de
- * guardar un aviso que dice en una frase cuanto, a quien y a que cuenta.
+ * Liquidar: pagar a un trabajador lo que ejecuto en un periodo, a sus precios.
+ * Se elige trabajador y periodo, se revisa la vista previa, se escribe la
+ * cuenta y se confirma en una ventana de aviso.
  */
 export function FormLiquidacion({
   abierto,
@@ -67,7 +64,7 @@ export function FormLiquidacion({
   const [form, setForm] = useState(vacio)
   const [confirmando, setConfirmando] = useState(false)
   const [cuentaPropuesta, setCuentaPropuesta] = useState(false)
-  const { enviando, errorGeneral, errores, guardar } = useEnvio()
+  const { enviando, errorGeneral, errores, guardar } = useEnvio(abierto)
 
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
 
@@ -89,9 +86,8 @@ export function FormLiquidacion({
   const cargoDe = (id: number) => catalogos?.cargos.find((c) => c.id === id)?.nombre ?? ''
 
   /**
-   * Elegir una forma de periodo borra lo que se hubiera puesto en las otras:
-   * un mes elegido y luego un rango no pueden convivir, porque no se sabria
-   * cual manda. A la elegida se le propone el mes o la quincena en curso.
+   * Elegir un tipo de periodo borra los datos de los otros y propone el mes
+   * o la quincena actual.
    */
   const elegirPeriodo = (tipo: PeriodoLiquidacion) => {
     const hoy = hoyTexto()
@@ -126,10 +122,18 @@ export function FormLiquidacion({
       : null
   const { dato: previa, cargando: calculando, error: errorPrevia } =
     useRecursoUnico<PreviaLiquidacion>(useRetardo(urlPrevia))
-  const previaVigente = previa && urlPrevia ? previa : null
+  // La vista previa solo vale si es del trabajador y el lapso que hay en pantalla.
+  const previaVigente =
+    previa &&
+    urlPrevia &&
+    rango &&
+    String(previa.trabajador.id) === form.trabajadorId &&
+    previa.desde === rango.desde &&
+    previa.hasta === rango.hasta
+      ? previa
+      : null
 
-  // La cuenta a la que se le pago la ultima vez se propone una sola vez por
-  // trabajador, y solo si el campo esta vacio: no pisa lo que ya se escribio.
+  // Propone la ultima cuenta usada con el trabajador, si el campo esta vacio.
   useEffect(() => {
     setCuentaPropuesta(false)
   }, [form.trabajadorId])
@@ -176,7 +180,7 @@ export function FormLiquidacion({
         tipoCuenta: form.tipoCuenta,
         numeroCuenta: form.numeroCuenta,
         observaciones: form.observaciones,
-        // Lo que se vio en el aviso: si el servidor calcula otra cosa, no guarda.
+        // Total visto en el aviso; si el servidor calcula otro, no guarda.
         totalEsperado: previaVigente?.total,
       },
       (creada) => {
@@ -186,8 +190,7 @@ export function FormLiquidacion({
     )
   }
 
-  // Si el servidor rechaza el guardado, el aviso se cierra para que se vea el
-  // motivo en el formulario.
+  // Si el servidor rechaza, se cierra el aviso para ver el error.
   useEffect(() => {
     if (errorGeneral) setConfirmando(false)
   }, [errorGeneral])
@@ -197,14 +200,14 @@ export function FormLiquidacion({
       titulo="Nueva liquidacion"
       descripcion="Pago por lo ejecutado en un lapso, a los precios acordados con el trabajador."
       abierto={abierto}
-      // Con la confirmacion abierta, Escape cierra solo la confirmacion.
+      // Con la confirmacion abierta, Escape solo la cierra a ella.
       onCerrar={confirmando ? () => setConfirmando(false) : onCerrar}
       ancho="xl"
     >
       <form onSubmit={pedirConfirmacion} className="space-y-5">
         <AvisoError mensaje={errorGeneral} />
 
-        {/* --- A quien ---------------------------------------------------- */}
+        {/* A quien */}
         <Campo etiqueta="Trabajador" error={errores.trabajadorId} requerido>
           <Seleccion
             value={form.trabajadorId}
@@ -223,7 +226,7 @@ export function FormLiquidacion({
           </Seleccion>
         </Campo>
 
-        {/* --- Por que lapso ---------------------------------------------- */}
+        {/* Periodo */}
         <section>
           <p className="etiqueta">
             Periodo<span className="ml-0.5 text-red-500">*</span>
@@ -241,7 +244,7 @@ export function FormLiquidacion({
                   onClick={() => elegirPeriodo(o.valor)}
                   className={`rounded-lg border px-3 py-2 text-left transition-colors ${
                     activo
-                      ? 'border-obra-900 bg-obra-900 text-white'
+                      ? 'border-marca-600 bg-marca-600 text-white'
                       : 'border-obra-200 bg-white text-obra-700 hover:bg-obra-50'
                   }`}
                 >
@@ -302,7 +305,7 @@ export function FormLiquidacion({
           )}
         </section>
 
-        {/* --- Lo que se va a pagar ----------------------------------------- */}
+        {/* Vista previa */}
         {urlPrevia && (
           <section className="rounded-xl border border-obra-200">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-obra-100 px-4 py-3">
@@ -385,7 +388,23 @@ export function FormLiquidacion({
                       {previaVigente.sinPrecio
                         .map((j) => `${j.codigoRegistro} (${j.actividad}, ${formatoNumero(j.cantidad)} ${j.unidad})`)
                         .join(', ')}
-                      . El precio se guarda en la jornada el dia que se registra.
+                      . Para pagarlas, acuerda el precio en la ficha del trabajador y vuelve a
+                      guardar cada jornada.
+                    </p>
+                  </div>
+                )}
+
+                {previaVigente.pendientesAnteriores.jornadas > 0 && (
+                  <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <p>
+                      Hay {previaVigente.pendientesAnteriores.jornadas} jornada
+                      {previaVigente.pendientesAnteriores.jornadas === 1 ? '' : 's'} sin pagar de
+                      antes de este lapso
+                      {previaVigente.pendientesAnteriores.desde
+                        ? ` (desde el ${formatoFecha(previaVigente.pendientesAnteriores.desde)})`
+                        : ''}
+                      . Para incluirlas, liquida por rango desde esa fecha.
                     </p>
                   </div>
                 )}
@@ -406,7 +425,7 @@ export function FormLiquidacion({
           </section>
         )}
 
-        {/* --- A que cuenta ------------------------------------------------- */}
+        {/* Cuenta */}
         <section>
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
             Cuenta para el deposito
@@ -458,10 +477,7 @@ export function FormLiquidacion({
         </div>
       </form>
 
-      {/*
-        El aviso sale en una ventana encima del formulario: es la ultima
-        oportunidad de ver cuanto, a quien y a que cuenta antes de pagar.
-      */}
+      {/* Ventana de confirmacion */}
       <Modal
         titulo="Confirmar liquidacion"
         abierto={confirmando && Boolean(previaVigente)}

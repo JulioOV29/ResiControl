@@ -5,15 +5,12 @@ import { sesionActual } from '@/lib/auth'
 import { puede, type Accion, type Rol } from '@/lib/dominio'
 import { prisma } from '@/lib/prisma'
 
-/** Error de negocio con codigo HTTP explicito. */
+/** Error de negocio con su codigo HTTP. */
 export class ErrorApi extends Error {
   constructor(
     public estado: number,
     mensaje: string,
-    /**
-     * Codigo corto para que la pantalla sepa que tipo de rechazo es y lo
-     * muestre como debe (por ejemplo, SIN_PRECIO abre una ventana de error).
-     */
+    /** Codigo opcional para la pantalla (ej. SIN_PRECIO abre una ventana de error). */
     public codigo?: string,
   ) {
     super(mensaje)
@@ -21,12 +18,8 @@ export class ErrorApi extends Error {
   }
 }
 
-/**
- * Convierte Decimal de Prisma a numero y Date a texto ISO, de forma recursiva.
- * Sin esto los Decimal viajan al cliente como cadenas y romperian cualquier
- * calculo o comparacion en el frontend.
- */
-export function serializar<T>(valor: T): unknown {
+/** Convierte Decimal a number y Date a texto ISO, en todo el objeto. */
+function serializar<T>(valor: T): unknown {
   if (valor === null || valor === undefined) return valor
   if (Prisma.Decimal.isDecimal(valor)) return Number(valor.toString())
   if (valor instanceof Date) return valor.toISOString()
@@ -45,14 +38,19 @@ export function ok(datos: unknown, estado = 200) {
   return NextResponse.json(serializar(datos), { status: estado })
 }
 
-export function fallo(mensaje: string, estado = 400, detalle?: unknown, codigo?: string) {
+function fallo(mensaje: string, estado = 400, detalle?: unknown, codigo?: string) {
   return NextResponse.json({ error: mensaje, detalle, codigo }, { status: estado })
 }
 
-/** Traduce cualquier excepcion a una respuesta HTTP consistente. */
+/** Convierte cualquier error en una respuesta HTTP. */
 export function manejarError(error: unknown) {
   if (error instanceof ErrorApi) {
     return fallo(error.message, error.estado, undefined, error.codigo)
+  }
+
+  // Cuerpo que no es JSON valido.
+  if (error instanceof SyntaxError) {
+    return fallo('Los datos enviados no son JSON valido', 400)
   }
 
   if (error instanceof ZodError) {
@@ -76,6 +74,13 @@ export function manejarError(error: unknown) {
       )
     }
     if (error.code === 'P2003') {
+      // Al borrar, significa que otros datos dependen de lo que se borra.
+      if (/\.delete(Many)?\(\)/.test(error.message)) {
+        return fallo(
+          'No se puede eliminar: hay registros, tareas u otros datos que dependen de esto',
+          409,
+        )
+      }
       return fallo('La referencia indicada no existe', 409)
     }
     if (error.code === 'P2025') {
@@ -87,10 +92,8 @@ export function manejarError(error: unknown) {
   }
 
   /**
-   * Lo que la base rechaza por sus propias reglas y Prisma no clasifica: borrar
-   * algo de lo que dependen otros datos (llave foranea con RESTRICT, codigo
-   * 23001 o 23503) o romper un CHECK (23514). Antes salian como "Error interno
-   * del servidor"; son conflictos con los datos y se dicen como tales.
+   * Errores de la base que Prisma no clasifica: llave foranea (23001, 23503)
+   * o CHECK (23514). Se responden como conflicto (409), no como error interno.
    */
   if (
     error instanceof Prisma.PrismaClientUnknownRequestError ||
@@ -111,10 +114,7 @@ export function manejarError(error: unknown) {
     }
   }
 
-  // El detalle se queda en el log del servidor. Devolverlo al navegador
-  // significaba exponer mensajes de Prisma, con nombres de tablas y columnas,
-  // a cualquiera que provocara un fallo. En desarrollo si se muestra, que es
-  // cuando hace falta para depurar.
+  // El detalle tecnico solo se muestra en desarrollo.
   console.error('[api]', error)
   const detalle =
     process.env.NODE_ENV === 'development' && error instanceof Error ? error.message : undefined
@@ -122,36 +122,28 @@ export function manejarError(error: unknown) {
 }
 
 /**
- * Exige sesion activa. Solo lee la cookie firmada: no toca la base.
- *
- * Basta para las lecturas. La cookie esta firmada con NEXTAUTH_SECRET, asi que
- * no se puede falsificar, y lo peor que puede pasar con una sesion que quedo
- * obsoleta es que alguien consulte datos unos minutos de mas. Cobrarle una
- * consulta a la base a cada GET si costaba caro: el panel hace nueve peticiones
- * y las nueve repetian el mismo SELECT del usuario contra un Postgres remoto.
+ * Exige sesion de un usuario que sigue activo. Consulta la base: un usuario
+ * desactivado deja de ver datos de inmediato, aunque su cookie siga vigente.
+ * Devuelve la sesion con el rol actual.
  */
 export async function exigirSesion() {
-  const sesion = await sesionActual()
-  if (!sesion?.user) throw new ErrorApi(401, 'Debes iniciar sesion')
-  return sesion
+  const { sesion, usuario } = await usuarioVigente()
+  return { ...sesion, user: { ...sesion.user, id: usuario.id, rol: usuario.rol } }
 }
 
-/**
- * Exige sesion y permiso, comprobando contra la base que el usuario siga
- * existiendo y habilitado.
- *
- * Aqui si vale la consulta, porque de aqui cuelga todo lo que escribe. La
- * sesion viaja en una cookie y no en la base, asi que sobrevive a que el
- * usuario se borre o se desactive, e incluso a rehacer la base entera: sin esta
- * comprobacion, guardar un registro fallaba con un error de llave foranea
- * ilegible, y ahora responde que hay que volver a iniciar sesion.
- *
- * El rol tambien sale de la base y no de la cookie, para que quitarle permisos
- * a alguien surta efecto de inmediato en lugar de esperar a que caduque su
- * sesion.
- */
+/** Exige sesion y permiso para la accion. Se usa en todo lo que escribe. */
 export async function exigirPermiso(accion: Accion) {
-  const sesion = await exigirSesion()
+  const { sesion, usuario } = await usuarioVigente()
+  if (!puede(usuario.rol as Rol, accion)) {
+    throw new ErrorApi(403, 'Tu rol no tiene permiso para esta accion')
+  }
+  return { ...sesion, user: { ...sesion.user, id: usuario.id, rol: usuario.rol } }
+}
+
+/** Sesion y usuario de la base, si sigue existiendo y activo. */
+async function usuarioVigente() {
+  const sesion = await sesionActual()
+  if (!sesion?.user) throw new ErrorApi(401, 'Debes iniciar sesion')
 
   const usuario = await prisma.usuario.findUnique({
     where: { id: sesion.user.id },
@@ -164,17 +156,10 @@ export async function exigirPermiso(accion: Accion) {
   if (!usuario.activo) {
     throw new ErrorApi(403, 'Tu cuenta esta desactivada')
   }
-  if (!puede(usuario.rol as Rol, accion)) {
-    throw new ErrorApi(403, 'Tu rol no tiene permiso para esta accion')
-  }
-
-  return {
-    ...sesion,
-    user: { ...sesion.user, id: usuario.id, rol: usuario.rol },
-  }
+  return { sesion, usuario }
 }
 
-/** Lee un id numerico de los parametros de ruta. */
+/** Lee un id numerico de la ruta. */
 export async function idDeRuta(params: Promise<{ id: string }>) {
   const { id } = await params
   const numero = Number(id)
@@ -182,4 +167,25 @@ export async function idDeRuta(params: Promise<{ id: string }>) {
     throw new ErrorApi(400, 'Identificador invalido')
   }
   return numero
+}
+
+/** Campos con precios acordados: solo los ven quienes liquidan. */
+const CAMPOS_PRECIO = new Set(['valorM2', 'tarifas'])
+
+/** Quita los precios de una respuesta si el rol no puede liquidar. */
+export function sinPrecios<T>(datos: T, rol: string): T {
+  if (puede(rol as Rol, 'liquidar')) return datos
+  const limpiar = (valor: unknown): unknown => {
+    if (Array.isArray(valor)) return valor.map(limpiar)
+    // Solo objetos simples; Date y Decimal se dejan como estan.
+    if (valor && typeof valor === 'object' && Object.getPrototypeOf(valor) === Object.prototype) {
+      return Object.fromEntries(
+        Object.entries(valor)
+          .filter(([clave]) => !CAMPOS_PRECIO.has(clave))
+          .map(([clave, v]) => [clave, limpiar(v)]),
+      )
+    }
+    return valor
+  }
+  return limpiar(datos) as T
 }

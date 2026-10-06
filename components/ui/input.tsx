@@ -22,11 +22,11 @@ export const AreaTexto = React.forwardRef<
 ))
 AreaTexto.displayName = 'AreaTexto'
 
-export function Etiqueta({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
+function Etiqueta({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
   return <label className={cn('etiqueta', className)} {...props} />
 }
 
-/** Campo de formulario completo: etiqueta, control y mensaje de error. */
+/** Campo de formulario: etiqueta, control y error. */
 export function Campo({
   etiqueta,
   htmlFor,

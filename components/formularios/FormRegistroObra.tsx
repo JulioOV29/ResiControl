@@ -15,12 +15,12 @@ import {
 import { dateAHora, formatoDuracion, indicadoresJornada, horaADate } from '@/lib/calculos'
 import { crearEtiquetas } from '@/lib/etiquetas'
 import { cantidadDelElemento, modoCantidad } from '@/lib/dominio'
-import type { Catalogos, Cuadrilla, Elemento, Meta, Registro, Tarea } from '@/types/dominio'
+import type { Catalogos, Cuadrilla, Elemento, Meta, Obra, Registro, Tarea } from '@/types/dominio'
 
-// La fecha del equipo, no la UTC: ver hoyTexto en lib/utils.
+// Fecha local, no UTC (ver hoyTexto).
 const hoy = hoyTexto
 
-/** Si el trabajador tiene precio acordado para esa actividad. */
+/** true si el trabajador tiene precio para esa actividad. */
 function tienePrecio(
   trabajador: { tarifas?: Array<{ actividadId: number }> } | undefined | null,
   actividadId: string | number | null | undefined,
@@ -29,9 +29,10 @@ function tienePrecio(
   return (trabajador?.tarifas ?? []).some((t) => t.actividadId === Number(actividadId))
 }
 
+// La fecha se pone al abrir el formulario (no al cargar la pagina).
 const vacio = {
-  fechaEjecucion: hoy(),
-  /** La tarea asignada de la que nace esta obra. Vacio: obra sin tarea detras. */
+  fechaEjecucion: '',
+  /** Tarea de la que nace la obra ('' = sin tarea). */
   tareaId: '',
   proyectoId: '',
   torreId: '',
@@ -42,7 +43,7 @@ const vacio = {
   cuadrillaId: '',
   trabajadorId: '',
   m2Ejecutados: '',
-  /** Solo se escribe cuando la unidad no sale del elemento (und, m3, kg). */
+  /** Solo se escribe en und, m3 y kg. */
   cantidadTotal: '',
   horaInicio: '07:00',
   horaFinal: '17:00',
@@ -51,10 +52,7 @@ const vacio = {
   observaciones: '',
 }
 
-/**
- * Abre una obra: el primer dia de trabajo sobre un elemento. Aqui se capturan
- * las medidas, que son contra lo que se mide el avance de toda la cadena.
- */
+/** Abre una obra: el primer dia de trabajo sobre un elemento. */
 export function FormRegistroObra({
   abierto,
   registro,
@@ -74,29 +72,15 @@ export function FormRegistroObra({
     ventanaError,
     mostrarVentanaError,
     cerrarVentanaError,
-  } = useEnvio()
+  } = useEnvio(abierto)
   const [form, setForm] = useState(vacio)
   const [metaTocada, setMetaTocada] = useState(false)
-  /**
-   * El formulario se llena en dos pasos: primero QUE se hace y DONDE, despues
-   * el resto. La unidad del trabajo sale de la actividad, asi que no se puede
-   * pedir "m2 ejecutados" antes de saber si eso se mide en m2.
-   */
+  /** Dos pasos: primero que y donde, luego el resto (la unidad depende de la actividad). */
   const [paso, setPaso] = useState(1)
 
   const cambiar = (campos: Partial<typeof vacio>) => setForm((f) => ({ ...f, ...campos }))
 
-  /**
-   * Un solo viaje para proyecto, torre, piso, zona, actividad y cuadrilla.
-   *
-   * Antes eran seis peticiones encadenadas: elegir el proyecto pedia sus
-   * torres, elegir la torre pedia sus pisos, y asi hasta la zona. El residente
-   * esperaba una ida y vuelta a la base entre un desplegable y el siguiente.
-   * Ahora la jerarquia ya esta en memoria y encadenar es filtrar un array.
-   *
-   * Los elementos se quedan aparte a proposito: son la parte que crece con el
-   * tamaño de la obra y solo hacen falta despues de elegir la zona.
-   */
+  /** Todos los catalogos en una peticion; los elementos se piden al elegir la zona. */
   const { dato: catalogos } = useRecursoUnico<Catalogos>(abierto ? '/api/catalogos' : null)
   const elementos = useRecurso<Elemento>(
     abierto && form.zonaId ? `/api/elementos?zonaId=${form.zonaId}` : null,
@@ -105,29 +89,36 @@ export function FormRegistroObra({
     abierto && form.cuadrillaId ? `/api/cuadrillas/${form.cuadrillaId}` : null,
   )
 
-  /**
-   * Las tareas que todavia no han dado lugar a una obra: son las que se pueden
-   * elegir aqui. Una tarea da una sola obra, asi que en cuanto se registra
-   * desaparece de la lista.
-   */
+  /** Al editar una apertura con avances: la obra, para descontar lo que ya llevan. */
+  const obraEditada = useRecurso<Obra>(
+    abierto && registro?.continuacion
+      ? `/api/obras?elementoId=${registro.elementoId}&actividadId=${registro.actividadId}`
+      : null,
+  )
+  const ejecutadoAvances = useMemo(() => {
+    if (!registro) return 0
+    const obra = obraEditada.datos.find((o) => o.id === registro.id)
+    return obra ? Math.max(0, obra.resumen.ejecutado - registro.m2Ejecutados) : 0
+  }, [obraEditada.datos, registro])
+
+  /** Tareas que aun no tienen obra. */
   const tareas = useRecurso<Tarea>(abierto ? '/api/tareas?sinObra=1' : null)
 
   const proyectos = catalogos?.proyectos ?? []
 
-  // Un registro nuevo solo puede usar catalogo vigente.
+  // Un registro nuevo solo usa actividades activas.
   const actividades = (catalogos?.actividades ?? []).filter((a) => a.activo)
 
   /**
-   * La unidad en la que se mide esta actividad: m2, m3, ml, kg o und. Al editar
-   * una jornada vieja puede venir de una actividad ya retirada del catalogo, por
-   * eso el segundo intento sale del propio registro.
+   * Unidad de la actividad. Al editar, puede venir del propio registro
+   * (si la actividad ya no esta activa).
    */
   const unidad =
     actividades.find((a) => String(a.id) === form.actividadId)?.unidadMedida ??
     registro?.actividad?.unidadMedida ??
     'm2'
 
-  /** Hasta que no se sepa que, donde y cuando, el paso 2 no tiene sentido. */
+  /** El paso 2 se habilita cuando hay fecha, elemento y actividad. */
   const listoPaso1 = Boolean(form.fechaEjecucion && form.elementoId && form.actividadId)
 
   const torres = useMemo(
@@ -163,32 +154,23 @@ export function FormRegistroObra({
   )
 
   const integrantes = (cuadrilla.dato?.integrantes ?? []).filter((i) => i.activo)
-  // Las opciones se escriben como en el panel: torre, piso, zona y cuadrilla
-  // llevan detras el codigo de su proyecto.
   const etiquetas = useMemo(() => crearEtiquetas(catalogos), [catalogos])
 
   const trabajadorElegido = integrantes.find((i) => String(i.trabajadorId) === form.trabajadorId)
 
-  /**
-   * El precio de esta jornada: el que tiene ESE trabajador para ESA actividad.
-   * Si no hay ninguno, la jornada se guarda igual pero sin importe, y conviene
-   * decirlo antes de guardar y no al liquidar.
-   */
+  /** Precio del trabajador para esta actividad. */
   const tarifaJornada = form.actividadId
     ? (trabajadorElegido?.trabajador?.tarifas ?? []).find(
         (t) => t.actividadId === Number(form.actividadId),
       )
     : undefined
-  const faltaTarifa = Boolean(form.trabajadorId && form.actividadId && !tarifaJornada)
+  // Solo con el trabajador ya cargado: mientras carga la cuadrilla no se sabe.
+  const faltaTarifa = Boolean(form.actividadId && trabajadorElegido && !tarifaJornada)
   const cargoId = trabajadorElegido?.trabajador?.cargo.id ?? null
 
   /**
-   * Heredar la tarea: se copian sus datos al formulario de una vez, incluida la
-   * ubicacion completa, que se reconstruye desde el elemento.
-   *
-   * Se copian, no se enlazan: si ese dia fue otra cuadrilla o el muro midio dos
-   * centimetros menos, el residente lo corrige aqui y la tarea se queda como
-   * estaba. Lo unico que la API exige que coincida es el elemento y la actividad.
+   * Copia los datos de la tarea al formulario (se pueden corregir).
+   * La API solo exige que coincidan elemento y actividad.
    */
   const heredarTarea = (tareaId: string) => {
     const tarea = tareas.datos.find((t) => String(t.id) === tareaId)
@@ -209,45 +191,77 @@ export function FormRegistroObra({
       trabajadorId: tarea.trabajadorId ? String(tarea.trabajadorId) : '',
       m2Meta: tarea.m2Meta === null ? '' : String(tarea.m2Meta),
     })
-    // La meta viene de la tarea: no hay que volver a proponerla desde las metas
-    // vigentes del proyecto.
+    // La meta viene de la tarea.
     if (tarea.m2Meta !== null) setMetaTocada(true)
   }
 
   const tareaElegida = tareas.datos.find((t) => String(t.id) === form.tareaId)
 
-  /**
-   * Las medidas que va a llevar la jornada: las del elemento constructivo.
-   *
-   * Al editar una jornada vieja se muestran las que quedaron copiadas en ella,
-   * que son las que mandan en sus indicadores aunque el elemento se haya
-   * corregido despues.
-   */
+  /** Si el elemento o la actividad ya no son los de la tarea elegida, se suelta la tarea. */
+  const soltarTarea = (campo: 'elementoId' | 'actividadId', valor: string) =>
+    tareaElegida && String(tareaElegida[campo]) !== valor ? { tareaId: '' } : {}
+
+  // Si el servidor rechaza un dato del paso 1, se vuelve a ese paso para verlo.
+  useEffect(() => {
+    if (errores.fechaEjecucion || errores.elementoId || errores.actividadId || errores.tareaId) {
+      setPaso(1)
+    }
+  }, [errores])
+
+  /** Medidas del elemento. Al editar, si no hay elemento cargado, las del registro. */
   const elementoElegido = elementos.datos.find((f) => String(f.id) === form.elementoId)
-  const medidasElemento = {
-    largo: elementoElegido?.largo ?? (registro?.largo || 0),
-    alto: elementoElegido?.alto ?? (registro?.alto || 0),
-  }
+  /** Al editar el mismo trabajo, la obra conserva la cantidad con que se abrio. */
+  const conservaCantidad = Boolean(
+    registro &&
+      form.elementoId === String(registro.elementoId) &&
+      form.actividadId === String(registro.actividadId) &&
+      registro.cantidadTotal !== null,
+  )
+  const medidasElemento = conservaCantidad
+    ? {
+        largo: Number(registro!.largo) || 0,
+        alto: Number(registro!.alto) || 0,
+        // Vanos que tenia el elemento cuando se abrio la obra.
+        areaVanos: Math.max(
+          0,
+          Math.round(
+            ((Number(registro!.largo) || 0) * (Number(registro!.alto) || 0) -
+              Number(registro!.cantidadTotal)) *
+              100,
+          ) / 100,
+        ),
+      }
+    : {
+        largo: elementoElegido?.largo ?? (registro?.largo || 0),
+        alto: elementoElegido?.alto ?? (registro?.alto || 0),
+        areaVanos: elementoElegido?.areaVanos ?? 0,
+      }
 
   /**
-   * Cuanto hay que ejecutar en esta obra, en la unidad de su actividad: en m2
-   * es largo x alto, en ml es el largo, y en und, m3 o kg lo escribe el
-   * residente, porque las medidas del muro no dicen cuantas piezas lleva. El
-   * servidor aplica la misma regla y es el que manda.
+   * Cantidad total de la obra: m2 = largo x alto menos vanos, ml = largo,
+   * und/m3/kg = la escribe el residente. El servidor aplica la misma regla.
    */
   const modo = modoCantidad(unidad)
   const cantidadObra =
     modo === 'captura'
       ? Number(form.cantidadTotal) || 0
-      : (cantidadDelElemento(unidad, medidasElemento.largo, medidasElemento.alto) ?? 0)
+      : conservaCantidad
+        ? Number(registro!.cantidadTotal)
+        : (cantidadDelElemento(
+          unidad,
+          medidasElemento.largo,
+          medidasElemento.alto,
+          medidasElemento.areaVanos,
+        ) ?? 0)
 
   useEffect(() => {
     if (!abierto) return
-    setMetaTocada(false)
+    // Al editar se respeta la meta que ya tenia la jornada.
+    setMetaTocada(Boolean(registro))
     setPaso(1)
 
     if (!registro) {
-      setForm(vacio)
+      setForm({ ...vacio, fechaEjecucion: hoy() })
       return
     }
 
@@ -273,7 +287,7 @@ export function FormRegistroObra({
     })
   }, [abierto, registro])
 
-  // La meta del dia se propone desde la meta vigente de la actividad.
+  // Propone la meta vigente de la actividad.
   useEffect(() => {
     if (!abierto || metaTocada) return
     if (!form.proyectoId || !form.actividadId) return
@@ -286,9 +300,11 @@ export function FormRegistroObra({
     })
 
     let cancelado = false
+    // Mientras el usuario no escriba la meta, sigue a la meta vigente.
     pedir<Meta | null>(`/api/metas/vigente?${parametros}`).then((r) => {
-      if (cancelado || !r.ok || !r.datos?.m2Objetivo) return
-      setForm((f) => (f.m2Meta ? f : { ...f, m2Meta: String(r.datos!.m2Objetivo) }))
+      if (cancelado || !r.ok) return
+      const propuesta = r.datos?.m2Objetivo ? String(r.datos.m2Objetivo) : ''
+      setForm((f) => (f.m2Meta === propuesta ? f : { ...f, m2Meta: propuesta }))
     })
     return () => {
       cancelado = true
@@ -301,17 +317,16 @@ export function FormRegistroObra({
 
     const jornada = indicadoresJornada({
       m2Ejecutados: form.m2Ejecutados || 0,
-      // Vacio significa "sin meta", no "meta cero": una jornada sin meta se
-      // queda fuera del cumplimiento en vez de contar como incumplida.
+      // Vacio = sin meta (no cuenta para el cumplimiento).
       m2Meta: form.m2Meta,
       horaInicio: horaADate(form.horaInicio),
       horaFinal: horaADate(form.horaFinal),
       tiempoRecesoMin: Number(form.tiempoRecesoMin) || 0,
     })
 
-    // La cantidad de la obra, en su unidad: la calcula cantidadObra, arriba.
     const area = cantidadObra
-    const hecho = Number(form.m2Ejecutados) || 0
+    // Al editar, cuenta tambien lo que llevan los avances.
+    const hecho = (Number(form.m2Ejecutados) || 0) + ejecutadoAvances
 
     return {
       jornada,
@@ -321,21 +336,25 @@ export function FormRegistroObra({
       completa: area > 0 && hecho >= area - 0.005,
       excedido: area > 0 && hecho > area + 0.005,
     }
-  }, [form, cantidadObra])
+  }, [form, cantidadObra, ejecutadoAvances])
 
   const enviarFormulario = (e: React.FormEvent) => {
     e.preventDefault()
-    // Enter en un campo del paso 1 no guarda a medias: avanza.
+    // Enter en el paso 1 avanza, no guarda.
     if (paso < 2) {
       if (listoPaso1) setPaso(2)
       return
     }
-    // Y si el envio lo disparo un boton que no es de guardar (el "Siguiente"),
-    // no se guarda: solo se cambio de paso.
+    // Si el envio vino de un boton que no es Guardar, solo se cambio de paso.
     const boton = (e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
     if (boton && boton.type !== 'submit') return
-    // Sin precio acordado no se guarda. Al editar solo se exige si cambia el
-    // trabajador o la actividad, igual que en el servidor.
+    if (vista?.excedido) {
+      mostrarVentanaError(
+        `Lo ejecutado no puede superar los ${formatoNumero(vista.area)} ${unidad} de la obra.`,
+      )
+      return
+    }
+    // Sin precio no se guarda (al editar, solo si cambia trabajador o actividad).
     const cambiaQuienOQue =
       !registro ||
       form.trabajadorId !== String(registro.trabajadorId ?? '') ||
@@ -362,7 +381,7 @@ export function FormRegistroObra({
       titulo={registro ? `Editar registro ${registro.codigoRegistro}` : 'Nuevo registro de obra'}
       descripcion="El primer dia de trabajo sobre un elemento. Aqui van sus medidas."
       abierto={abierto}
-      // Con la ventana de error abierta, Escape cierra solo esa ventana.
+      // Con la ventana de error abierta, Escape solo la cierra a ella.
       onCerrar={ventanaError ? cerrarVentanaError : onCerrar}
       ancho="xl"
     >
@@ -371,10 +390,10 @@ export function FormRegistroObra({
 
         <Pasos actual={paso} titulos={['Trabajo y ubicacion', 'Personal y jornada']} />
 
-        {/* --- Paso 1: que se hace, donde y en que fecha ------------------- */}
+        {/* --- Paso 1: que, donde y cuando --- */}
         {paso === 1 && (
         <>
-        {/* --- La tarea que se va a ejecutar ------------------------------- */}
+        {/* Tarea */}
         {!registro && (
           <section>
             <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-obra-500">
@@ -419,6 +438,7 @@ export function FormRegistroObra({
               <Entrada
                 type="date"
                 value={form.fechaEjecucion}
+                max={hoy()}
                 onChange={(e) => cambiar({ fechaEjecucion: e.target.value })}
                 required
               />
@@ -436,6 +456,7 @@ export function FormRegistroObra({
                     elementoId: '',
                     cuadrillaId: '',
                     trabajadorId: '',
+                    tareaId: '',
                   })
                 }
                 required
@@ -453,7 +474,7 @@ export function FormRegistroObra({
               <Seleccion
                 value={form.torreId}
                 onChange={(e) =>
-                  cambiar({ torreId: e.target.value, pisoId: '', zonaId: '', elementoId: '' })
+                  cambiar({ torreId: e.target.value, pisoId: '', zonaId: '', elementoId: '', tareaId: '' })
                 }
                 disabled={!form.proyectoId}
                 required
@@ -470,7 +491,7 @@ export function FormRegistroObra({
             <Campo etiqueta="Piso" requerido>
               <Seleccion
                 value={form.pisoId}
-                onChange={(e) => cambiar({ pisoId: e.target.value, zonaId: '', elementoId: '' })}
+                onChange={(e) => cambiar({ pisoId: e.target.value, zonaId: '', elementoId: '', tareaId: '' })}
                 disabled={!form.torreId}
                 required
               >
@@ -486,7 +507,7 @@ export function FormRegistroObra({
             <Campo etiqueta="Zona" requerido>
               <Seleccion
                 value={form.zonaId}
-                onChange={(e) => cambiar({ zonaId: e.target.value, elementoId: '' })}
+                onChange={(e) => cambiar({ zonaId: e.target.value, elementoId: '', tareaId: '' })}
                 disabled={!form.pisoId}
                 required
               >
@@ -502,7 +523,7 @@ export function FormRegistroObra({
             <Campo etiqueta="Elemento constructivo" error={errores.elementoId} requerido>
               <Seleccion
                 value={form.elementoId}
-                onChange={(e) => cambiar({ elementoId: e.target.value })}
+                onChange={(e) => cambiar({ elementoId: e.target.value, ...soltarTarea('elementoId', e.target.value) })}
                 disabled={!form.zonaId}
                 required
               >
@@ -515,11 +536,11 @@ export function FormRegistroObra({
               </Seleccion>
             </Campo>
 
-            {/* La actividad manda: de ella sale la unidad del paso 2. */}
+            {/* La actividad define la unidad del paso 2 */}
             <Campo etiqueta="Actividad" error={errores.actividadId} requerido>
               <Seleccion
                 value={form.actividadId}
-                onChange={(e) => cambiar({ actividadId: e.target.value })}
+                onChange={(e) => cambiar({ actividadId: e.target.value, ...soltarTarea('actividadId', e.target.value) })}
                 required
               >
                 <option value="">Selecciona...</option>
@@ -535,7 +556,7 @@ export function FormRegistroObra({
         </>
         )}
 
-        {/* --- Paso 2: con quien, cuanto y en cuanto tiempo ---------------- */}
+        {/* --- Paso 2: quien, cuanto y en cuanto tiempo --- */}
         {paso === 2 && (
         <>
         <section>
@@ -559,16 +580,16 @@ export function FormRegistroObra({
               </Seleccion>
             </Campo>
 
-            <Campo etiqueta="Trabajador" error={errores.trabajadorId}>
+            <Campo etiqueta="Trabajador" error={errores.trabajadorId} requerido>
               <Seleccion
                 value={form.trabajadorId}
                 onChange={(e) => cambiar({ trabajadorId: e.target.value })}
                 disabled={!form.cuadrillaId}
+                required
               >
-                <option value="">Sin asignar</option>
+                <option value="">Elige quien hizo la jornada</option>
                 {integrantes.map((i) => {
-                  // Sin precio acordado para esta actividad no se puede elegir:
-                  // primero se acuerda en su ficha.
+                  // Sin precio para la actividad no se puede elegir.
                   const sinPrecio = Boolean(form.actividadId) && !tienePrecio(i.trabajador, form.actividadId)
                   return (
                     <option
@@ -606,18 +627,19 @@ export function FormRegistroObra({
             Medidas del elemento y trabajo del dia
           </h3>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {/*
-              Las medidas llegan del elemento constructivo y no se teclean: un
-              muro se mide una vez, al darlo de alta. El servidor las copia a la
-              jornada al guardarla, y esa copia es la que fija el 100% de la
-              obra aunque el elemento se corrija despues.
-            */}
+            {/* Medidas del elemento (no se escriben aqui) */}
             <div className="rounded-lg border border-obra-200 bg-obra-50 px-3 py-2 sm:col-span-2">
               <p className="text-xs text-obra-500">Medidas del elemento</p>
               {medidasElemento.largo > 0 ? (
                 <>
                   <p className="text-base font-semibold tabular-nums text-obra-900">
                     {formatoNumero(medidasElemento.largo)} x {formatoNumero(medidasElemento.alto)} m
+                    {modo === 'area' && medidasElemento.areaVanos > 0 && (
+                      <span className="text-sm font-normal text-obra-500">
+                        {' '}
+                        − {formatoNumero(medidasElemento.areaVanos)} m2 de vanos
+                      </span>
+                    )}
                     {modo !== 'captura' && (
                       <span className="text-sm font-normal text-obra-500">
                         {' '}
@@ -749,7 +771,7 @@ export function FormRegistroObra({
                   <div
                     className={
                       vista.completa
-                        ? 'h-full rounded-full bg-emerald-500'
+                        ? 'h-full rounded-full bg-menta-400'
                         : 'h-full rounded-full bg-acento-500'
                     }
                     style={{ width: `${Math.min(100, vista.avance * 100)}%` }}

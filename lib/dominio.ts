@@ -1,10 +1,6 @@
 /**
- * Constantes del dominio: los valores validos de cada enumeracion y como se
- * escriben en pantalla.
- *
- * Vive aparte de lib/esquemas.ts a proposito. Los formularios necesitan estas
- * listas, y si las sacaran de esquemas.ts arrastrarian Zod entero al navegador
- * sin usarlo. Aqui no hay dependencias: son datos.
+ * Valores validos de cada enumeracion y como se muestran.
+ * Sin dependencias, para poder usarse en el navegador.
  */
 
 export const ESTADOS_PROYECTO = ['PLANEACION', 'EN_EJECUCION', 'SUSPENDIDO', 'FINALIZADO'] as const
@@ -15,7 +11,7 @@ export type EstadoProyecto = (typeof ESTADOS_PROYECTO)[number]
 export type EstadoEjecucion = (typeof ESTADOS_EJECUCION)[number]
 export type Rol = (typeof ROLES)[number]
 
-export const ETIQUETA_ESTADO_PROYECTO: Record<EstadoProyecto, string> = {
+const ETIQUETA_ESTADO_PROYECTO: Record<EstadoProyecto, string> = {
   PLANEACION: 'En planeacion',
   EN_EJECUCION: 'En ejecucion',
   SUSPENDIDO: 'Suspendido',
@@ -32,10 +28,10 @@ export const ETIQUETA_ESTADO_EJECUCION: Record<EstadoEjecucion, string> = {
 export const ETIQUETA_ROL: Record<Rol, string> = {
   ADMIN: 'Administrador: acceso total',
   RESIDENTE: 'Residente: registra ejecucion y gestiona obra',
-  SUPERVISOR: 'Supervisor: solo consulta e informes',
+  SUPERVISOR: 'Supervisor: solo consulta',
 }
 
-/** Opciones listas para un <select>, en el orden en que se muestran. */
+/** Opciones para un <select>. */
 export const opcionesEstadoProyecto = ESTADOS_PROYECTO.map((v) => ({
   valor: v,
   texto: ETIQUETA_ESTADO_PROYECTO[v],
@@ -48,18 +44,7 @@ export const opcionesEstadoEjecucion = ESTADOS_EJECUCION.map((v) => ({
 
 export const opcionesRol = ROLES.map((v) => ({ valor: v, texto: ETIQUETA_ROL[v] }))
 
-// ---------------------------------------------------------------------------
-//  Unidades de medida de las actividades
-//
-//  Las de uso corriente en obra. Se guarda el codigo corto ("m2", "ml"), que es
-//  lo que se pinta al lado de cada cifra en tablas e indicadores; el texto
-//  largo y los ejemplos solo viven en el desplegable, para que el residente
-//  elija sin dudar.
-//
-//  El campo en la base sigue siendo texto y no un enum: las actividades que ya
-//  existen conservan la unidad con la que se crearon, aunque un dia esta lista
-//  cambie.
-// ---------------------------------------------------------------------------
+// --- Unidades de medida de las actividades ---
 
 export const UNIDADES_MEDIDA = [
   {
@@ -89,21 +74,15 @@ export const UNIDADES_MEDIDA = [
   },
 ] as const
 
-export type UnidadMedida = (typeof UNIDADES_MEDIDA)[number]['valor']
-
 /**
- * Como se sabe cuanto hay que ejecutar en una obra, segun la unidad de su
- * actividad:
- *
+ * Como se obtiene la cantidad total de una obra segun la unidad:
  *   area     m2: largo x alto del elemento
- *   largo    ml: el largo del elemento
- *   captura  und, m3, kg: el elemento no lo dice (cuantos tomacorrientes lleva
- *            un muro no sale de sus medidas), asi que lo escribe el residente
- *            al abrir la obra
+ *   largo    ml: largo del elemento
+ *   captura  und, m3, kg: la escribe el residente al abrir la obra
  */
 export type ModoCantidad = 'area' | 'largo' | 'captura'
 
-/** Normaliza la unidad guardada: "M2", "m²" y " m2 " son la misma. */
+/** "M2", "m²" y " m2 " se tratan como "m2". */
 export function normalizarUnidad(unidad: string | null | undefined): string {
   const u = (unidad ?? '').trim().toLowerCase().replace('²', '2').replace('³', '3')
   return u || 'm2'
@@ -116,42 +95,41 @@ export function modoCantidad(unidad: string | null | undefined): ModoCantidad {
   return 'captura'
 }
 
+/** Suma de largo x ancho de los vanos, redondeada a centesimas. */
+export function areaDeVanos(vanos: Array<{ largo: number | string; ancho: number | string }>) {
+  const total = vanos.reduce((suma, v) => suma + Number(v.largo) * Number(v.ancho), 0)
+  return Math.round(total * 100) / 100
+}
+
 /**
- * La cantidad total que sale del elemento, o null si esa unidad no se puede
- * deducir de sus medidas y hay que capturarla.
+ * Cantidad que sale del elemento, o null si hay que escribirla.
+ * En m2 es el area neta: largo x alto menos el area de los vanos.
  */
 export function cantidadDelElemento(
   unidad: string | null | undefined,
   largo: number,
   alto: number,
+  areaVanos = 0,
 ): number | null {
   const modo = modoCantidad(unidad)
-  if (modo === 'area') return Math.round(largo * alto * 100) / 100
+  if (modo === 'area') return Math.round((largo * alto - areaVanos) * 100) / 100
   if (modo === 'largo') return largo
   return null
 }
 
-// ---------------------------------------------------------------------------
-//  Permisos por rol
-//
-//  Viven aqui, junto a los demas datos del dominio, para que el servidor y el
-//  navegador miren la misma tabla. En lib/auth.ts no pueden estar: ese modulo
-//  arrastra Prisma y bcrypt, que no tienen nada que hacer en el cliente.
-//
-//  Ojo con lo que significa cada lado: en el navegador esto decide que botones
-//  se ven, nada mas. La autorizacion de verdad la aplica cada API Route.
-// ---------------------------------------------------------------------------
+// --- Permisos por rol ---
+// En el navegador solo deciden que botones se ven; la API los vuelve a validar.
 
 export const PERMISOS = {
   /** Crear, editar o borrar catalogos, obra, personal y metas. */
   gestionar: ['ADMIN', 'RESIDENTE'],
-  /** Crear o editar registros de ejecucion. */
+  /** Crear o editar registros de obra. */
   registrar: ['ADMIN', 'RESIDENTE'],
-  /** Administrar usuarios del sistema. */
+  /** Administrar usuarios. */
   administrar: ['ADMIN'],
-  /** Generar y consultar liquidaciones de pago. */
+  /** Hacer y consultar liquidaciones. */
   liquidar: ['ADMIN', 'RESIDENTE'],
-  /** Consultar dashboard e informes. */
+  /** Consultar el panel. */
   consultar: ['ADMIN', 'RESIDENTE', 'SUPERVISOR'],
 } as const satisfies Record<string, readonly Rol[]>
 
@@ -162,9 +140,7 @@ export function puede(rol: Rol | undefined | null, accion: Accion) {
   return (PERMISOS[accion] as readonly Rol[]).includes(rol)
 }
 
-// ---------------------------------------------------------------------------
-//  Liquidaciones
-// ---------------------------------------------------------------------------
+// --- Liquidaciones ---
 
 export const PERIODOS_LIQUIDACION = ['MES', 'QUINCENA', 'RANGO'] as const
 export type PeriodoLiquidacion = (typeof PERIODOS_LIQUIDACION)[number]
@@ -177,7 +153,7 @@ export const ETIQUETA_PERIODO: Record<PeriodoLiquidacion, string> = {
 
 export const TIPOS_CUENTA = ['AHORROS', 'CORRIENTE'] as const
 
-/** Ultimo dia de un mes: 28, 29, 30 o 31. `mes` va de 1 a 12. */
+/** Ultimo dia del mes (mes de 1 a 12). */
 function ultimoDia(anio: number, mes: number) {
   return new Date(Date.UTC(anio, mes, 0)).getUTCDate()
 }
@@ -185,13 +161,11 @@ function ultimoDia(anio: number, mes: number) {
 const dos = (n: number) => String(n).padStart(2, '0')
 
 /**
- * Las fechas de un periodo de liquidacion, en aaaa-mm-dd.
- *
- *   MES       el mes completo: del 1 al ultimo dia
- *   QUINCENA  la primera (1 al 15) o la segunda (16 al ultimo dia)
- *   RANGO     las dos fechas tal como se eligieron
- *
- * Devuelve null mientras falte algo por elegir.
+ * Fechas de un periodo de liquidacion (aaaa-mm-dd):
+ *   MES       del 1 al ultimo dia
+ *   QUINCENA  del 1 al 15, o del 16 al ultimo dia
+ *   RANGO     las fechas elegidas
+ * Devuelve null si falta algun dato.
  */
 export function fechasDePeriodo(
   tipo: PeriodoLiquidacion,
@@ -210,4 +184,39 @@ export function fechasDePeriodo(
   if (datos.quincena === '1') return { desde: `${m[1]}-${m[2]}-01`, hasta: `${m[1]}-${m[2]}-15` }
   if (datos.quincena === '2') return { desde: `${m[1]}-${m[2]}-16`, hasta: `${m[1]}-${m[2]}-${dos(fin)}` }
   return null
+}
+
+/** Hoy en Colombia (aaaa-mm-dd), sin importar la zona horaria del servidor. */
+export function hoyEnColombia() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+}
+
+/** Hoy en Colombia como se guardan las fechas (medianoche UTC). */
+export function fechaDeHoy() {
+  return new Date(`${hoyEnColombia()}T00:00:00.000Z`)
+}
+
+/** true si aaaa-mm-dd es una fecha que existe (no 2026-02-31). */
+export function fechaExiste(texto: string) {
+  const fecha = new Date(`${texto}T00:00:00.000Z`)
+  return !Number.isNaN(fecha.getTime()) && fecha.toISOString().slice(0, 10) === texto
+}
+
+/** true si las fechas cuadran con el tipo de periodo (MES y QUINCENA son fijos). */
+export function periodoCuadra(tipo: PeriodoLiquidacion, desde: string, hasta: string) {
+  if (tipo === 'RANGO') return hasta >= desde
+  const mes = desde.slice(0, 7)
+  if (tipo === 'MES') {
+    const esperado = fechasDePeriodo('MES', { mes })
+    return esperado?.desde === desde && esperado.hasta === hasta
+  }
+  return ['1', '2'].some((quincena) => {
+    const esperado = fechasDePeriodo('QUINCENA', { mes, quincena })
+    return esperado?.desde === desde && esperado.hasta === hasta
+  })
 }

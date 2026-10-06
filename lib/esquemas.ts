@@ -1,11 +1,11 @@
-/**
- * Validacion de todo lo que entra por la API. Es la primera barrera antes de
- * tocar la base de datos, y las reglas de aqui son las mismas que aplican los
- * CHECK de PostgreSQL, para que el usuario reciba un mensaje claro en lugar de
- * un error crudo del motor.
- */
+/** Validacion de lo que llega a la API (mismas reglas que los CHECK de la base). */
 import { z } from 'zod'
 import {
+  areaDeVanos,
+  fechaExiste,
+  hoyEnColombia,
+  normalizarUnidad,
+  periodoCuadra,
   ESTADOS_EJECUCION,
   ESTADOS_PROYECTO,
   PERIODOS_LIQUIDACION,
@@ -13,7 +13,7 @@ import {
   TIPOS_CUENTA,
 } from '@/lib/dominio'
 
-// --- Piezas reutilizables ---------------------------------------------------
+// --- Piezas reutilizables ---
 
 const texto = (max: number, nombre: string) =>
   z
@@ -30,26 +30,37 @@ const textoOpcional = (max: number) =>
 
 const patronFecha = /^\d{4}-\d{2}-\d{2}$/
 
-const fecha = (nombre: string) =>
+/** Fecha aaaa-mm-dd que existe en el calendario. */
+const textoDeFecha = (nombre: string) =>
   z
     .string()
     .regex(patronFecha, `${nombre} debe tener el formato aaaa-mm-dd`)
+    .refine(fechaExiste, `${nombre} no existe en el calendario`)
+
+const fecha = (nombre: string) =>
+  textoDeFecha(nombre).transform((v) => new Date(`${v}T00:00:00.000Z`))
+
+/** Fecha que no puede ser posterior a hoy (hora de Colombia). */
+const fechaHastaHoy = (nombre: string) =>
+  textoDeFecha(nombre)
+    .refine((v) => v <= hoyEnColombia(), `${nombre} no puede ser posterior a hoy`)
     .transform((v) => new Date(`${v}T00:00:00.000Z`))
 
 const fechaOpcional = z
-  .union([z.literal(''), z.null(), z.string().regex(patronFecha)])
+  .union([z.literal(''), z.null(), textoDeFecha('La fecha')])
   .optional()
   .transform((v) => (v ? new Date(`${v}T00:00:00.000Z`) : null))
 
+/** Redondea a centesimas, como guarda la base. */
+const centesimas = (v: number) => Math.round(v * 100) / 100
 
-// El orden del union importa: la cadena vacia debe capturarse ANTES de
-// intentar la coercion, porque Number('') es 0 y un campo en blanco acabaria
-// guardandose como un objetivo de cero en lugar de quedar sin definir.
+// El '' se revisa antes de convertir a numero: Number('') es 0 y no debe
+// guardarse como cero.
 const decimalOpcional = (nombre: string) =>
   z
     .union([z.literal(''), z.null(), z.coerce.number()])
     .optional()
-    .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v)))
+    .transform((v) => (v === '' || v === null || v === undefined ? null : centesimas(Number(v))))
     .refine((v) => v === null || (v >= 0 && v <= 99999999.99), {
       message: `${nombre} debe ser un numero positivo`,
     })
@@ -57,7 +68,7 @@ const decimalOpcional = (nombre: string) =>
 const hora = (nombre: string) =>
   z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, `${nombre} debe tener el formato hh:mm`)
 
-// --- Jerarquia de obra ------------------------------------------------------
+// --- Jerarquia de obra ---
 
 export const esquemaProyecto = z.object({
   codigo: texto(50, 'El codigo'),
@@ -101,32 +112,43 @@ export const esquemaZona = z.object({
 const medida = (nombre: string) =>
   z.coerce
     .number({ message: `${nombre} debe ser un numero` })
-    .gt(0, `${nombre} debe ser mayor que cero`)
-    .max(99999.99, `${nombre} es demasiado grande`)
+    .transform(centesimas)
+    .refine((v) => v > 0, `${nombre} debe ser de al menos 0.01`)
+    .refine((v) => v <= 99999.99, `${nombre} es demasiado grande`)
 
-/**
- * El elemento constructivo: el muro, la losa o la fachada concreta sobre la que
- * se ejecuta una actividad. Aqui viven sus medidas, y solo aqui: la tarea que
- * se asigne sobre el y el registro que abra la obra las heredan.
- */
-export const esquemaElemento = z.object({
-  zonaId: z.coerce.number().int().positive('Selecciona una zona'),
-  codigoDwg: texto(50, 'El codigo DWG'),
-  descripcion: texto(150, 'La descripcion'),
-  unidad: textoOpcional(20),
-  largo: medida('El largo'),
-  alto: medida('El alto'),
-  estado: z.enum(ESTADOS_EJECUCION),
+/** Hueco del elemento (ventana, puerta...): largo x ancho. */
+const esquemaVano = z.object({
+  descripcion: textoOpcional(100),
+  largo: medida('El largo del vano'),
+  ancho: medida('El ancho del vano'),
 })
 
-// --- Catalogos --------------------------------------------------------------
+/** Elemento constructivo (muro, losa...). Sus medidas solo se guardan aqui. */
+export const esquemaElemento = z
+  .object({
+    zonaId: z.coerce.number().int().positive('Selecciona una zona'),
+    codigoDwg: texto(50, 'El codigo DWG'),
+    descripcion: texto(150, 'La descripcion'),
+    unidad: textoOpcional(20),
+    largo: medida('El largo'),
+    alto: medida('El alto'),
+    estado: z.enum(ESTADOS_EJECUCION),
+    /** Si no llega, al editar se conservan los vanos que ya tiene. */
+    vanos: z.array(esquemaVano).max(50, 'Demasiados vanos').optional(),
+  })
+  .refine((d) => areaDeVanos(d.vanos ?? []) < d.largo * d.alto, {
+    message: 'Los vanos no pueden ocupar toda el area del elemento',
+    path: ['vanos'],
+  })
+
+// --- Catalogos ---
 
 export const esquemaActividad = z.object({
   nombre: texto(100, 'El nombre'),
-  unidadMedida: texto(20, 'La unidad de medida'),
+  // Se guarda normalizada (M2 o m² -> m2) para no partir los totales del panel.
+  unidadMedida: texto(20, 'La unidad de medida').transform(normalizarUnidad),
   descripcion: textoOpcional(255),
-  // La actividad no lleva precio: el precio por metro se acuerda con cada
-  // trabajador y se captura en su ficha. Ver esquemaTrabajador.
+  // El precio no va en la actividad, sino en cada trabajador.
   activo: z.boolean(),
 })
 
@@ -135,9 +157,9 @@ export const esquemaCargo = z.object({
   descripcion: textoOpcional(255),
 })
 
-// --- Personal ---------------------------------------------------------------
+// --- Personal ---
 
-/** Un precio por metro para una actividad concreta de este trabajador. */
+/** Precio de una actividad para el trabajador. */
 const esquemaTarifa = z.object({
   actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
   valorM2: z.coerce
@@ -152,10 +174,7 @@ export const esquemaTrabajador = z.object({
   apellido: texto(100, 'El apellido'),
   cargoId: z.coerce.number().int().positive('Selecciona un cargo'),
   activo: z.boolean(),
-  /**
-   * Lo que se le paga por metro en cada actividad. La lista puede venir vacia:
-   * un trabajador puede darse de alta antes de acordar precios.
-   */
+  /** Precios por actividad. Puede ir vacia. */
   tarifas: z
     .array(esquemaTarifa)
     .optional()
@@ -177,12 +196,12 @@ export const esquemaAsignacion = z.object({
   fechaInicio: fecha('La fecha de inicio'),
 })
 
-/** Cierre de una asignacion. La fecha la pone el cliente, en su zona horaria. */
+/** Cierre de una asignacion; la fecha la manda el navegador (hora local). */
 export const esquemaCierreAsignacion = z.object({
   fechaFin: fecha('La fecha de cierre'),
 })
 
-// --- Metas ------------------------------------------------------------------
+// --- Metas ---
 
 export const esquemaMeta = z
   .object({
@@ -192,8 +211,9 @@ export const esquemaMeta = z
       .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
       .optional()
       .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
-    rendimientoObjetivo: decimalOpcional('El rendimiento objetivo'),
-    m2Objetivo: decimalOpcional('Los m2 objetivo'),
+    // Un objetivo en 0 se toma como "sin objetivo".
+    rendimientoObjetivo: decimalOpcional('El rendimiento objetivo').transform((v) => (v ? v : null)),
+    m2Objetivo: decimalOpcional('Los m2 objetivo').transform((v) => (v ? v : null)),
     vigenciaDesde: fecha('La vigencia desde'),
     vigenciaHasta: fechaOpcional,
   })
@@ -206,7 +226,7 @@ export const esquemaMeta = z
     path: ['rendimientoObjetivo'],
   })
 
-// --- Usuarios ---------------------------------------------------------------
+// --- Usuarios ---
 
 const passwordBase = z
   .string()
@@ -234,17 +254,14 @@ export const esquemaUsuarioEdicion = z.object({
   activo: z.boolean(),
 })
 
-// --- Tareas asignadas -------------------------------------------------------
+// --- Tareas ---
 
-/**
- * El trabajo que se encarga antes de ejecutarlo. Lleva los mismos datos con los
- * que luego se registra la jornada, y el registro los hereda copiados.
- */
+/** Trabajo encargado antes de ejecutarse. El registro de obra copia sus datos. */
 export const esquemaTarea = z
   .object({
     elementoId: z.coerce.number().int().positive('Selecciona un elemento constructivo'),
     actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
-    // Se puede programar el trabajo antes de saber quien lo hara.
+    // Opcional: se puede programar sin saber quien lo hara.
     cuadrillaId: z
       .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
       .optional()
@@ -253,7 +270,6 @@ export const esquemaTarea = z
       .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
       .optional()
       .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
-    // Las medidas no se piden: son las del elemento constructivo.
     m2Meta: decimalOpcional('Los m2 meta').transform((v) => (v && v > 0 ? v : null)),
     fechaInicioPlan: fechaOpcional,
     fechaFinPlan: fechaOpcional,
@@ -269,26 +285,26 @@ export const esquemaTarea = z
     path: ['trabajadorId'],
   })
 
-// --- Registros de obra ------------------------------------------------------
+// --- Registros de obra ---
 
-/** Campos que comparten el registro que abre la obra y los de avance. */
+/** Campos comunes a la apertura y a los avances. */
 const camposJornada = {
-  fechaEjecucion: fecha('La fecha de ejecucion'),
+  fechaEjecucion: fechaHastaHoy('La fecha de ejecucion'),
   cuadrillaId: z.coerce.number().int().positive('Selecciona una cuadrilla'),
-  trabajadorId: z
-    .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
-    .optional()
-    .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
+  // Toda jornada es de un trabajador: asi se le puede liquidar.
+  trabajadorId: z.coerce
+    .number({ message: 'Selecciona el trabajador que hizo la jornada' })
+    .int()
+    .positive('Selecciona el trabajador que hizo la jornada'),
   m2Ejecutados: z.coerce
     .number({ message: 'Los m2 ejecutados deben ser un numero' })
-    .gt(0, 'Los m2 ejecutados deben ser mayores que cero')
-    .max(99999999.99, 'Los m2 ejecutados son demasiado grandes'),
+    .transform(centesimas)
+    .refine((v) => v > 0, 'Los m2 ejecutados deben ser mayores que cero')
+    .refine((v) => v <= 99999999.99, 'Los m2 ejecutados son demasiado grandes'),
   horaInicio: hora('La hora de inicio'),
   horaFinal: hora('La hora final'),
   tiempoRecesoMin: z.coerce.number().int().min(0, 'El receso no puede ser negativo').max(600),
-  // Una meta de cero no es una meta, es la ausencia de meta: se guarda nula
-  // para que la jornada quede fuera del cumplimiento en vez de contar como
-  // incumplida.
+  // Meta 0 se guarda como null (jornada sin meta).
   m2Meta: decimalOpcional('Los m2 meta').transform((v) => (v && v > 0 ? v : null)),
   observaciones: textoOpcional(2000),
 }
@@ -303,49 +319,34 @@ const mensajeReceso = {
   path: ['tiempoRecesoMin'],
 }
 
-/** El receso debe dejar tiempo efectivo dentro de la jornada. */
+/** El receso debe dejar tiempo de trabajo. */
 const recesoCabe = (d: { horaInicio: string; horaFinal: string; tiempoRecesoMin: number }) => {
   const [hi, mi] = d.horaInicio.split(':').map(Number)
   const [hf, mf] = d.horaFinal.split(':').map(Number)
   return d.tiempoRecesoMin < hf * 60 + mf - (hi * 60 + mi)
 }
 
-/**
- * Registro que ABRE una obra: lleva la ubicacion, la actividad y las medidas
- * del elemento, que es contra lo que se mide el avance de toda la cadena.
- */
+/** Registro que abre una obra. */
 export const esquemaRegistroObra = z
   .object({
     ...camposJornada,
-    /**
-     * La tarea de la que nace esta obra, si nace de una. Es opcional a
-     * proposito: se puede seguir abriendo obra directamente, y los registros
-     * que ya existian no tienen tarea detras.
-     */
+    /** Tarea de la que nace la obra (opcional). */
     tareaId: z
       .union([z.literal(''), z.null(), z.coerce.number().int().positive()])
       .optional()
       .transform((v) => (v === '' || v === null || v === undefined ? null : Number(v))),
     elementoId: z.coerce.number().int().positive('Selecciona un elemento constructivo'),
     actividadId: z.coerce.number().int().positive('Selecciona una actividad'),
-    /**
-     * Cantidad total de la obra. Solo cuenta cuando la actividad se mide en una
-     * unidad que no sale de las medidas del elemento (und, m3, kg); en m2 y ml
-     * el servidor la calcula y lo que llegue aqui se ignora.
-     */
+    /** Cantidad total: solo se usa en und, m3 y kg. En m2 y ml la calcula el servidor. */
     cantidadTotal: decimalOpcional('La cantidad total').transform((v) => (v && v > 0 ? v : null)),
-    // Las medidas no viajan desde el navegador: el servidor las copia del
-    // elemento constructivo, que es donde se miden. Que lo ejecutado no pase
-    // del area se comprueba alli mismo, por la misma razon.
+    // Las medidas no llegan del navegador: el servidor las toma del elemento.
   })
   .refine((d) => d.horaFinal > d.horaInicio, mensajeHoraFinal)
   .refine(recesoCabe, mensajeReceso)
 
 /**
- * Registro de AVANCE: continua una obra ya abierta. No repite la ubicacion ni
- * las medidas, solo apunta al registro anterior de esa misma obra.
- * Que lo acumulado no pase del area se valida en la API, porque depende de las
- * demas jornadas ya guardadas y no solo de esta.
+ * Registro de avance: apunta al registro anterior de la misma obra.
+ * Que no supere lo pendiente se valida en la API.
  */
 export const esquemaRegistroAvance = z
   .object({
@@ -358,18 +359,15 @@ export const esquemaRegistroAvance = z
   .refine((d) => d.horaFinal > d.horaInicio, mensajeHoraFinal)
   .refine(recesoCabe, mensajeReceso)
 
-// --- Liquidaciones ----------------------------------------------------------
+// --- Liquidaciones ---
 
-/**
- * Lo que se pide para liquidar. Lo que se paga no viaja desde el navegador: el
- * servidor lo vuelve a calcular con las jornadas y sus tarifas congeladas.
- */
+/** Datos para liquidar. El total lo recalcula el servidor. */
 export const esquemaLiquidacion = z
   .object({
     trabajadorId: z.coerce.number().int().positive('Selecciona un trabajador'),
     tipoPeriodo: z.enum(PERIODOS_LIQUIDACION),
-    desde: fecha('La fecha desde'),
-    hasta: fecha('La fecha hasta'),
+    desde: textoDeFecha('La fecha desde'),
+    hasta: textoDeFecha('La fecha hasta'),
     banco: textoOpcional(80),
     tipoCuenta: z
       .union([z.enum(TIPOS_CUENTA), z.literal(''), z.null()])
@@ -382,14 +380,19 @@ export const esquemaLiquidacion = z
       .max(40, 'El numero de cuenta no puede pasar de 40 caracteres')
       .regex(/^[0-9][0-9 -]*[0-9]$/, 'El numero de cuenta solo lleva digitos, espacios o guiones'),
     observaciones: textoOpcional(2000),
-    /**
-     * El total que el residente vio en el aviso. Si al guardar da otro (alguien
-     * registro o pago jornadas entretanto), no se guarda: se paga lo que se
-     * confirmo o nada.
-     */
+    /** Total que se mostro en el aviso. Si al guardar da otro, no se guarda. */
     totalEsperado: z.coerce.number().nonnegative().optional(),
   })
   .refine((d) => d.hasta >= d.desde, {
     message: 'La fecha hasta no puede ser anterior a la fecha desde',
     path: ['hasta'],
   })
+  .refine((d) => periodoCuadra(d.tipoPeriodo, d.desde, d.hasta), {
+    message: 'Las fechas no corresponden a un mes o una quincena completos',
+    path: ['desde'],
+  })
+  .transform((d) => ({
+    ...d,
+    desde: new Date(`${d.desde}T00:00:00.000Z`),
+    hasta: new Date(`${d.hasta}T00:00:00.000Z`),
+  }))

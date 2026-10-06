@@ -103,7 +103,8 @@ app/
     dashboard/      panel de indicadores
     proyectos/      jerarquía de obra
     ejecucion/      registros diarios
-    informes/
+    tareas/         tareas asignadas
+    liquidaciones/  pagos a trabajadores
     ...
   login/            página pública de acceso
   api/              capa REST
@@ -114,12 +115,15 @@ lib/
   prisma.ts         cliente Prisma singleton
   auth.ts           configuración de NextAuth y permisos por rol
   calculos.ts       motor de indicadores
+  consultas.ts      consultas y validaciones compartidas por la API
+  liquidaciones.ts  calculo de liquidaciones
   api.ts            helpers de respuesta, errores y permisos
 prisma/
   schema.prisma     modelo relacional
   constraints.sql   reglas de integridad
 scripts/
-  seed.js           datos iniciales (fuera de Git)
+  seed.js           datos iniciales
+  respaldo.js       respaldo de la base a JSON (corre al iniciar npm run dev)
 proxy.ts            protección de rutas
 ```
 
@@ -148,15 +152,15 @@ con la administración del software.
 |---|---|
 | `ADMIN` | Todo, incluida la gestión de usuarios |
 | `RESIDENTE` | Gestionar obra y personal, registrar ejecución, consultar |
-| `SUPERVISOR` | Solo consultar el panel y generar informes |
+| `SUPERVISOR` | Solo consultar el panel |
 
 ---
 
 ## Indicadores
 
 Ningún indicador se guarda como columna. Todos se derivan en `lib/calculos.ts`,
-que es la única definición de cada fórmula, de modo que el panel y los informes
-no puedan discrepar.
+que es la única definición de cada fórmula, de modo que todas las pantallas
+den los mismos números.
 
 ```
 m2_totales       = largo × alto
